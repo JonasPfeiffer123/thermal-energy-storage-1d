@@ -176,6 +176,12 @@ m_k · cp · dT_k/dt = Q_adv,k + Q_cond,k + Q_loss,k
 
 See [docs/physics.md](docs/physics.md) for the full derivation.
 
+## Funding
+
+This work was developed as part of the EFRE/ESF-funded Junior Research Group **"Energy Storage"** at [Hochschule Zittau/Görlitz](https://www.hszg.de). The project aims at developing a modular simulation model for co-simulation with district heating network tools (e.g. pandapipes).
+
+![Funding notice — Saxony / EU](docs/img/funding_saxony_EU.jpg)
+
 ## License
 
 GPL-3.0-or-later — see [LICENSE](LICENSE).
