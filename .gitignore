@@ -1,0 +1,58 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+*.whl
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Measurement data (not included – see benchmark/README or validation script docstrings)
+data/
+
+# FreeTTES (external dependency, not included)
+FreeTTES/
+
+# Temporary / large output files
+*.log
+*.tmp
+
+# Claude.md
+CLAUDE.md
+
+# Named benchmark runs (user-generated, not part of the committed reference results)
+benchmark/results/runs/
+
+# PDF duplicates of SVG benchmark plots
+benchmark/**/*.pdf

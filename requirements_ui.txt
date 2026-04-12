@@ -1,0 +1,6 @@
+# Additional dependencies for the PyQt6 user interface
+# Core model dependencies are listed in requirements.txt
+
+PyQt6>=6.4.0
+matplotlib>=3.7.0
+numpy>=1.20

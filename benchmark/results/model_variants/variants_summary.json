@@ -1,0 +1,184 @@
+{
+  "scenario": "60h: Charging 0-23h / Idle 24-35h / Discharging 36-59h",
+  "tank": {
+    "V_m3": 50140.0,
+    "R_m": 20.0,
+    "H_m": 39.9,
+    "U_loss": 0.2
+  },
+  "flow_m3h": 300.0,
+  "dt_s": 3600,
+  "variants": [
+    {
+      "label": "0D (fully mixed)",
+      "n_nodes": 1,
+      "solver": "explicit",
+      "scheme": "—",
+      "ms_per_step": 0.0613,
+      "speedup": null,
+      "mae_K": null,
+      "rmse_K": null
+    },
+    {
+      "label": "1D N=2  Upw-Expl",
+      "n_nodes": 2,
+      "solver": "explicit",
+      "scheme": "upwind",
+      "ms_per_step": 0.1938,
+      "speedup": null,
+      "mae_K": null,
+      "rmse_K": null
+    },
+    {
+      "label": "1D N=5  Upw-Expl",
+      "n_nodes": 5,
+      "solver": "explicit",
+      "scheme": "upwind",
+      "ms_per_step": 0.2016,
+      "speedup": null,
+      "mae_K": null,
+      "rmse_K": null
+    },
+    {
+      "label": "1D N=10 Upw-Expl",
+      "n_nodes": 10,
+      "solver": "explicit",
+      "scheme": "upwind",
+      "ms_per_step": 0.206,
+      "speedup": null,
+      "mae_K": null,
+      "rmse_K": null
+    },
+    {
+      "label": "1D N=50 Upw-Expl",
+      "n_nodes": 50,
+      "solver": "explicit",
+      "scheme": "upwind",
+      "ms_per_step": 0.2444,
+      "speedup": null,
+      "mae_K": null,
+      "rmse_K": null
+    },
+    {
+      "label": "1D N=10 TVD-Expl",
+      "n_nodes": 10,
+      "solver": "explicit",
+      "scheme": "tvd",
+      "ms_per_step": 0.1962,
+      "speedup": null,
+      "mae_K": null,
+      "rmse_K": null
+    },
+    {
+      "label": "1D N=50 TVD-Expl",
+      "n_nodes": 50,
+      "solver": "explicit",
+      "scheme": "tvd",
+      "ms_per_step": 0.3702,
+      "speedup": null,
+      "mae_K": null,
+      "rmse_K": null
+    },
+    {
+      "label": "1D N=2  Upw-Impl",
+      "n_nodes": 2,
+      "solver": "implicit",
+      "scheme": "upwind",
+      "ms_per_step": 0.1478,
+      "speedup": null,
+      "mae_K": null,
+      "rmse_K": null
+    },
+    {
+      "label": "1D N=10 Upw-Impl",
+      "n_nodes": 10,
+      "solver": "implicit",
+      "scheme": "upwind",
+      "ms_per_step": 0.1821,
+      "speedup": null,
+      "mae_K": null,
+      "rmse_K": null
+    },
+    {
+      "label": "1D N=20 Upw-Impl",
+      "n_nodes": 20,
+      "solver": "implicit",
+      "scheme": "upwind",
+      "ms_per_step": 0.2018,
+      "speedup": null,
+      "mae_K": null,
+      "rmse_K": null
+    },
+    {
+      "label": "1D N=50 Upw-Impl",
+      "n_nodes": 50,
+      "solver": "implicit",
+      "scheme": "upwind",
+      "ms_per_step": 0.2816,
+      "speedup": null,
+      "mae_K": null,
+      "rmse_K": null
+    },
+    {
+      "label": "1D N=200 Upw-Impl",
+      "n_nodes": 200,
+      "solver": "implicit",
+      "scheme": "upwind",
+      "ms_per_step": 0.7083,
+      "speedup": null,
+      "mae_K": null,
+      "rmse_K": null
+    },
+    {
+      "label": "1D N=10 TVD-Impl",
+      "n_nodes": 10,
+      "solver": "implicit",
+      "scheme": "tvd",
+      "ms_per_step": 0.1703,
+      "speedup": null,
+      "mae_K": null,
+      "rmse_K": null
+    },
+    {
+      "label": "1D N=50 TVD-Impl",
+      "n_nodes": 50,
+      "solver": "implicit",
+      "scheme": "tvd",
+      "ms_per_step": 0.2818,
+      "speedup": null,
+      "mae_K": null,
+      "rmse_K": null
+    },
+    {
+      "label": "1D N=200 TVD-Impl",
+      "n_nodes": 200,
+      "solver": "implicit",
+      "scheme": "tvd",
+      "ms_per_step": 0.7315,
+      "speedup": null,
+      "mae_K": null,
+      "rmse_K": null
+    },
+    {
+      "label": "1D N=50 Upw-Impl+HS",
+      "n_nodes": 50,
+      "solver": "implicit",
+      "scheme": "upwind",
+      "ms_per_step": 0.274,
+      "speedup": null,
+      "mae_K": null,
+      "rmse_K": null
+    },
+    {
+      "label": "1D N=50 TVD-Impl+HS",
+      "n_nodes": 50,
+      "solver": "implicit",
+      "scheme": "tvd",
+      "ms_per_step": 0.2689,
+      "speedup": null,
+      "mae_K": null,
+      "rmse_K": null
+    }
+  ],
+  "reference": null
+}

@@ -1,0 +1,18 @@
+label,n_nodes,solver,scheme,ms_per_step,speedup_vs_ft,mae_K,rmse_K,max_err_K,bias_K,cfl_stable,n_substeps
+0D (fully mixed),1,explicit,—,0.0613,,,,,,yes,1
+1D N=2  Upw-Expl,2,explicit,upwind,0.1938,,,,,,yes,1
+1D N=5  Upw-Expl,5,explicit,upwind,0.2016,,,,,,yes,1
+1D N=10 Upw-Expl,10,explicit,upwind,0.206,,,,,,yes,1
+1D N=50 Upw-Expl,50,explicit,upwind,0.2444,,,,,,yes,1
+1D N=10 TVD-Expl,10,explicit,tvd,0.1962,,,,,,yes,1
+1D N=50 TVD-Expl,50,explicit,tvd,0.3702,,,,,,yes,1
+1D N=2  Upw-Impl,2,implicit,upwind,0.1478,,,,,,yes,1
+1D N=10 Upw-Impl,10,implicit,upwind,0.1821,,,,,,yes,1
+1D N=20 Upw-Impl,20,implicit,upwind,0.2018,,,,,,yes,1
+1D N=50 Upw-Impl,50,implicit,upwind,0.2816,,,,,,yes,1
+1D N=200 Upw-Impl,200,implicit,upwind,0.7083,,,,,,yes,1
+1D N=10 TVD-Impl,10,implicit,tvd,0.1703,,,,,,yes,1
+1D N=50 TVD-Impl,50,implicit,tvd,0.2818,,,,,,yes,1
+1D N=200 TVD-Impl,200,implicit,tvd,0.7315,,,,,,yes,1
+1D N=50 Upw-Impl+HS,50,implicit,upwind,0.274,,,,,,yes,1
+1D N=50 TVD-Impl+HS,50,implicit,tvd,0.2689,,,,,,yes,1

@@ -1,0 +1,37 @@
+======================================================================
+RECOMMENDATION: Model choice for co-simulation with district heating network
+======================================================================
+
+Context
+-------
+  The district heating network simulation model (e.g. pandapipes) uses implicit
+  Euler with time steps of typically dt = 3600 s. The storage must be solved
+  within a few milliseconds at each coupling step so that the overall
+  simulation is not dominated by the storage.
+
+Stability requirement
+---------------------
+  Explicit solvers require sub-stepping for fine grids (CFL condition).
+  For dt = 3600 s and N >= 50, multiple substeps are needed → overhead.
+  Implicit solvers are unconditionally stable → no sub-stepping, no
+  risk with variable network time steps.
+  RECOMMENDATION: Implicit Euler for coupling.
+
+0D vs. 1D stratification model
+-------------------------------
+  (No FreeTTES run – quantitative comparison not possible.)
+
+Recommended configuration
+-------------------------
+  1D N=2  Upw-Impl – implicit, unconditionally stable.
+
+Notes
+------------------------------
+  - The difference between 0D and 1D (N>=10 implicit) is quantifiable
+    and documented in the table variants_table.csv.
+  - TVD scheme provides little additional benefit over implicit Euler, as the
+    time integration error dominates at dt=3600 s.
+  - For pure planning studies (annual simulation, no peak load resolution)
+    0D may suffice; for dynamic network calculations,
+    1D N=10-50 implicit is recommended.
+======================================================================
