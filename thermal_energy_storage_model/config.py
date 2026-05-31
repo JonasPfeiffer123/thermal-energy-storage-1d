@@ -209,8 +209,25 @@ class StorageConfig:
 
     Notes
     -----
-    For the implicit solver, TVD correction is not applied; advection remains
-    upwind. Buoyancy correction (``buoyancy``) is still applied each timestep.
+    Combinations:
+
+    * ``solver="explicit"`` + ``advection_scheme="tvd"`` — original default.
+      Anti-diffusion TVD correction is integrated explicitly in the Euler
+      step; subject to CFL stability for the advection AND for explicit
+      conduction.
+    * ``solver="implicit"`` + ``advection_scheme="upwind"`` — unconditionally
+      stable; pure upwind advection (more thermocline smearing at coarse
+      timesteps).
+    * ``solver="implicit"`` + ``advection_scheme="tvd"`` — implicit upwind
+      base + deferred-correction TVD anti-diffusion added to the right-hand
+      side. Unconditionally stable for the bulk dynamics; the TVD correction
+      itself self-deactivates as CFL approaches 1 (via the ``(1 − CFL)``
+      weight in the van-Leer flux) so very large timesteps degenerate to
+      pure implicit upwind. Recommended for production runs that need both
+      sharp-front accuracy and arbitrary timestep choice.
+
+    Buoyancy correction (``buoyancy``) is always applied as a post-step
+    convective adjustment, independent of solver and advection_scheme.
     """
 
     diffusor_model: Optional["DiffusorModel"] = field(default=None, repr=False)

@@ -700,9 +700,16 @@ class ThermalStorage1D:
             Q_hx_nodes[0] += Q_hs   # top node receives headspace heat
 
         if cfg.solver == "implicit":
-            # --- Fully implicit Euler step (TDMA) ---
+            # --- Fully implicit Euler step (TDMA), optional deferred TVD ---
+            Q_tvd_explicit = None
+            if cfg.advection_scheme == "tvd" and n >= 3:
+                F_int = F[1:-1]
+                Q_tvd_explicit = self._compute_tvd_correction_ports(
+                    T, F_int, cp_mean, dt
+                )
             T_new = self._step_implicit(
-                T, dt, F, S, T_src, C_nodes, K_cond_iface_T, cp_mean, Q_hx_nodes
+                T, dt, F, S, T_src, C_nodes, K_cond_iface_T, cp_mean, Q_hx_nodes,
+                Q_tvd_explicit=Q_tvd_explicit,
             )
         else:
             # --- Compute temperature-rate terms ---
@@ -762,9 +769,11 @@ class ThermalStorage1D:
         K_cond_iface: np.ndarray,
         cp: float,
         Q_hx_nodes: Optional[np.ndarray] = None,
+        Q_tvd_explicit: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """
-        Fully implicit Euler step with upwind advection (TDMA).
+        Fully implicit Euler step with upwind advection (TDMA), optional
+        deferred TVD anti-diffusion correction.
 
         Advection and conduction are evaluated at new time t+dt
         (unconditionally stable, no CFL restriction). Heat losses and
@@ -776,6 +785,15 @@ class ThermalStorage1D:
 
         with tridiagonal structure, solved efficiently by the
         Thomas algorithm (TDMA) in O(N).
+
+        TVD correction is applied as a **deferred explicit source term**
+        (`Q_tvd_explicit`) added to the right-hand side. Computed by the caller
+        from T_old via :meth:`_compute_tvd_correction_ports`, it carries the
+        usual `(1 − CFL)` weighting — so when the user picks a timestep so
+        large that CFL ≥ 1 at all faces, the correction vanishes and the
+        scheme degenerates to pure implicit upwind (unconditionally stable).
+        At moderate CFL the correction reduces the upwind smearing of
+        thermocline fronts.
 
         Parameters
         ----------
@@ -799,17 +817,11 @@ class ThermalStorage1D:
         Q_hx_nodes : np.ndarray, optional
             Heat-exchanger source terms per node [W], shape (n). Added to
             right-hand side (explicitly linearized). Default: None (= 0).
-
-        Returns
-        -------
-        np.ndarray
-            New temperature profile T_new [°C].
-
-        Notes
-        -----
-        The implicit upwind scheme does not apply TVD correction. For very
-        fine grids (small Δz) or slow flows, numerical thermocline diffusion
-        remains small.
+        Q_tvd_explicit : np.ndarray, optional
+            Deferred TVD anti-diffusion correction per node [W], shape (n).
+            Caller computes it from T_old (matching the explicit-path
+            convention) and passes it in when ``advection_scheme == "tvd"``.
+            Default: None (= 0, pure implicit upwind).
         """
         n = self.n
         K = K_cond_iface        # (n-1,)
@@ -831,6 +843,12 @@ class ThermalStorage1D:
         # --- Heat exchangers (explicitly linearized -> RHS) ---
         if Q_hx_nodes is not None:
             b += Q_hx_nodes
+
+        # --- Deferred TVD anti-diffusion (explicit, -> RHS) ---
+        # Conservatively distributed in _compute_tvd_correction_ports so
+        # sum(Q_tvd) = 0 by construction → energy-conserving correction.
+        if Q_tvd_explicit is not None:
+            b += Q_tvd_explicit
 
         # --- Conduction (implicit) ---
         # Interface k (between nodes k and k+1), k = 0..n-2:
