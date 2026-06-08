@@ -562,6 +562,91 @@ class ThermalStorage1D:
         inputs: StorageInputs,
     ) -> StorageOutputs:
         """
+        Perform one storage timestep over the external timestep ``dt``.
+
+        For ``solver="explicit"`` with ``auto_substep=True`` (default), the
+        step is automatically split into CFL-stable sub-steps whenever ``dt``
+        would violate the CFL condition; the returned state still advances by
+        the full ``dt``. Outlet quantities (``port_temperatures``,
+        ``hx_outlet_temperatures``) and ``Q_loss`` are returned as the mean
+        over the sub-steps, which represents the external interval more
+        faithfully than a single start-of-step evaluation. In all other cases
+        (implicit solver, CFL already satisfied, or ``auto_substep=False``) a
+        single step is taken.
+
+        See :meth:`_step_single` for the full description of the numerical
+        scheme, parameters and outputs.
+        """
+        cfg = self.config
+        if not (cfg.solver == "explicit" and cfg.auto_substep):
+            return self._step_single(state, dt, inputs)
+
+        n_sub = self._required_substeps(state, dt, inputs.ports)
+        if n_sub <= 1:
+            return self._step_single(state, dt, inputs)
+
+        dt_sub = dt / n_sub
+        cur = state
+        pt_sum: Optional[np.ndarray] = None
+        hx_sum: Optional[np.ndarray] = None
+        q_loss_sum = 0.0
+        for _ in range(n_sub):
+            out = self._step_single(cur, dt_sub, inputs)
+            cur = out.state
+            pt = np.asarray(out.port_temperatures, dtype=float)
+            pt_sum = pt if pt_sum is None else pt_sum + pt
+            if out.hx_outlet_temperatures:
+                hx = np.asarray(out.hx_outlet_temperatures, dtype=float)
+                hx_sum = hx if hx_sum is None else hx_sum + hx
+            q_loss_sum += out.Q_loss
+
+        port_temperatures = (
+            [float(x) for x in (pt_sum / n_sub)] if pt_sum is not None else []
+        )
+        hx_outlet_temperatures = (
+            [float(x) for x in (hx_sum / n_sub)] if hx_sum is not None else []
+        )
+        return StorageOutputs(
+            port_temperatures=port_temperatures,
+            Q_loss=q_loss_sum / n_sub,
+            state=cur,
+            hx_outlet_temperatures=hx_outlet_temperatures,
+            T_headspace=cur.T_headspace,
+        )
+
+    def _required_substeps(
+        self,
+        state: StorageState,
+        dt: float,
+        ports: list,
+    ) -> int:
+        """
+        Number of CFL-stable explicit sub-steps for external timestep ``dt``.
+
+        Returns 1 when a single explicit step already satisfies the CFL
+        condition (or when there is no flow). Otherwise returns the smallest
+        ``n`` such that each sub-step ``dt/n`` keeps the Courant number at or
+        below the 0.9 safety margin also used by :meth:`max_stable_dt`.
+        """
+        F = self._compute_inter_node_fluxes(ports)
+        m_for_cfl = float(np.max(np.abs(F)))
+        if m_for_cfl <= 0.0:
+            return 1
+        rho = float(np.min(np.asarray(
+            self._fluid.rho(state.temperatures), dtype=float
+        )))
+        cfl_val = (m_for_cfl / (rho * self.A_cross)) * dt / self.dz
+        if cfl_val <= 0.9:
+            return 1
+        return int(np.ceil(cfl_val / 0.9))
+
+    def _step_single(
+        self,
+        state: StorageState,
+        dt: float,
+        inputs: StorageInputs,
+    ) -> StorageOutputs:
+        """
         Perform one storage simulation timestep.
 
         This is the model core method. It implements an

@@ -230,6 +230,30 @@ class StorageConfig:
     convective adjustment, independent of solver and advection_scheme.
     """
 
+    auto_substep: bool = True
+    """
+    Automatic CFL sub-stepping for the explicit solver.
+
+    Only relevant when ``solver="explicit"``. If the external timestep ``dt``
+    passed to :meth:`ThermalStorage1D.step` would violate the CFL condition
+    (CFL > 1), the step is internally split into the smallest number of
+    equal sub-steps that restores stability, and the sub-steps are integrated
+    sequentially. The publicly returned state advances by the full external
+    ``dt``.
+
+    ``True`` (Standard)
+        Sub-step automatically; the explicit solver stays stable for any
+        ``dt`` without the caller having to respect the CFL limit.
+
+    ``False``
+        No sub-stepping. A CFL violation only triggers a ``RuntimeWarning``
+        and the (potentially unstable) single explicit step is taken. Use
+        this to reproduce the raw single-step behaviour.
+
+    The implicit solver (``solver="implicit"``) is unconditionally stable and
+    ignores this flag.
+    """
+
     diffusor_model: Optional["DiffusorModel"] = field(default=None, repr=False)
     """
     Diffusor mixing model for all ports.

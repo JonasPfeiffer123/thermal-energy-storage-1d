@@ -492,16 +492,18 @@ $$\Delta t_{\max} = 0.9 \cdot \frac{m_k}{\dot{m}_{\max}}$$
 | Network heat storage | 500 m³ | 20 kg/s | ~320 s |
 | Large tank (FreeTTES benchmark) | 50 000 m³ | 82 kg/s | ~3 100 s |
 
-If the external timestep $\Delta t_\text{ext}$ exceeds the CFL limit, **sub-stepping** is applied automatically:
+If the external timestep $\Delta t_\text{ext}$ exceeds the CFL limit, **sub-stepping** is applied automatically *inside* `step()` (config flag `auto_substep`, default `True`). The model computes the smallest number of equal sub-steps that keeps each sub-step at $\text{CFL} \leq 0.9$ and integrates them sequentially:
+
+$$n_\text{sub} = \left\lceil \frac{\text{CFL}(\Delta t_\text{ext})}{0.9} \right\rceil, \qquad \Delta t_\text{sub} = \frac{\Delta t_\text{ext}}{n_\text{sub}}$$
+
+The publicly returned state advances by the full external $\Delta t_\text{ext}$; outlet quantities (`port_temperatures`, `hx_outlet_temperatures`) and `Q_loss` are returned as the mean over the sub-steps, which represents the external coupling interval more faithfully than a single start-of-step evaluation. The caller therefore does not need to respect the CFL limit:
 
 ```python
-if dt_max < dt_extern:
-    n_sub = ceil(dt_extern / dt_max) + 1
-    dt_sub = dt_extern / n_sub
-    for _ in range(n_sub):
-        outputs = storage.step(state, dt=dt_sub, inputs=inputs)
-        state = outputs.state
+config = StorageConfig(..., solver="explicit", auto_substep=True)   # default
+outputs = storage.step(state, dt=3600.0, inputs=inputs)             # any dt is stable
 ```
+
+Setting `auto_substep=False` disables this: a CFL violation then only emits a `RuntimeWarning` and the single (potentially unstable) explicit step is taken — useful for reproducing the raw single-step behaviour. The implicit solver is unconditionally stable and ignores this flag.
 
 ### Implicit Solver (TDMA)
 
