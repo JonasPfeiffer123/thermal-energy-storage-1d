@@ -737,9 +737,10 @@ class ThermalStorage1D:
         C_nodes = rho_T * self._V_nodes * cp_T
 
         # Thermal conductivity at profile mean; effective coefficients.
-        # Note: lambda_fluid is evaluated at mean profile temperature (approx.),
-        # not node-wise. For water (0-100 °C) the error is usually < 10 %; for
-        # strongly temperature-dependent fluids consider node-wise evaluation.
+        # Note: lambda_fluid is evaluated at the mean profile temperature (approx.),
+        # not node-wise. Over a typical 20-90 °C TES operating range the error is
+        # usually < 10 %; for strongly temperature-dependent fluids consider
+        # node-wise evaluation. The advection cp below is treated the same way.
         T_mean = float(T.mean())
         lambda_eff_T = float(self._fluid.lambda_fluid(T_mean)) * cfg.lambda_eff_factor
         A_iface = 0.5 * (self._A_cross_nodes[:-1] + self._A_cross_nodes[1:])

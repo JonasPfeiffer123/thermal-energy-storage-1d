@@ -446,7 +446,7 @@ For water in the range 20–90 °C, density varies by approximately ±2 %, speci
 
 ### Temperature-Dependent Fluid Properties (`WaterProperties`)
 
-For higher accuracy, especially when comparing with reference models, temperature-dependent polynomial correlations are used (matching FreeTTES coefficients, valid approximately 0–100 °C):
+For higher accuracy, especially when comparing with reference models, temperature-dependent polynomial correlations are used (matching FreeTTES coefficients, valid for liquid water 0–130 °C at atmospheric pressure):
 
 | Quantity | Polynomial | Unit |
 |---|---|---|
@@ -459,6 +459,15 @@ fluid = WaterProperties()
 ```
 
 > The influence on simulation accuracy is small: in the 60-h benchmark scenario, the MAE difference between `ConstantFluidProperties` and `WaterProperties` is less than 2 %.
+
+**Limitation — profile-mean evaluation of `cp` and `λ`.** Density `ρ(T)` and the
+local heat capacity `C_k = ρ(T_k)·V_k·cp(T_k)` are evaluated **node-wise** (each
+node uses its own temperature). However, the conduction conductivity `λ(T)` and
+the representative `cp` used in the advection term are evaluated **once per step
+at the profile-mean temperature** `T̄`, not node-wise. For water over a typical
+20–90 °C operating range this introduces an error below ~10 % in those two
+terms; for fluids with strongly temperature-dependent `cp`/`λ`, or across a very
+wide thermocline, a node-wise evaluation would be more accurate.
 
 ---
 
