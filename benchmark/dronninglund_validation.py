@@ -44,6 +44,12 @@ Clone the data repository into the data/ folder:
 import sys
 from pathlib import Path
 
+if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except AttributeError:
+        pass
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
