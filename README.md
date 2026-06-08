@@ -214,15 +214,14 @@ cffconvert --format bibtex
 
 ### Archiving a citable release (Zenodo DOI)
 
-To obtain a permanent, citable DOI for a release:
+This repository is archived on [Zenodo](https://zenodo.org); each tagged GitHub
+release mints a permanent, citable version DOI (the badge above always points to
+the latest one via Zenodo's concept DOI). To archive a future release:
 
-1. Sign in to [Zenodo](https://zenodo.org) with GitHub and enable archiving for
-   this repository under *Settings → GitHub*.
-2. Create a tagged release on GitHub (e.g. `v1.0.0`). Zenodo automatically
-   archives the release and mints a version DOI plus a concept DOI that always
-   resolves to the latest version.
-3. Add the resulting DOI to the `doi:` field in [CITATION.cff](CITATION.cff) and
-   the version badge to this README, then update the [CHANGELOG.md](CHANGELOG.md).
+1. Create a tagged release on GitHub (e.g. `v1.1.0`). Zenodo automatically
+   archives it and mints a new version DOI.
+2. Update the `doi:` field in [CITATION.cff](CITATION.cff), the badge in this
+   README, and [CHANGELOG.md](CHANGELOG.md) with the new DOI.
 
 See [CHANGELOG.md](CHANGELOG.md) for the version history.
 
