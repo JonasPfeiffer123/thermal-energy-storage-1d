@@ -41,6 +41,7 @@ Clone the data repository into the data/ folder:
     git clone https://github.com/PitStorages/DronninglundData data/DronninglundData
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -61,7 +62,7 @@ DATA_FILE = (
     / "data/DronninglundData/data"
     / "Dronninglund_treated_data_and_flow_rates_2014.csv"
 )
-OUT_DIR = ROOT / "benchmark/results/dronninglund"
+OUT_DIR = Path(os.environ.get("TES_VALIDATION_OUT_DIR", ROOT / "benchmark/results/dronninglund"))
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 sys.path.insert(0, str(ROOT))

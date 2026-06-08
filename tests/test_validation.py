@@ -31,11 +31,14 @@ pandas = pytest.importorskip("pandas", reason="pandas not installed")
 
 
 @pytest.mark.skipif(not DATA_FILE.exists(), reason="Dronninglund data not cloned")
-def test_dronninglund_total_mae_regression():
+def test_dronninglund_total_mae_regression(tmp_path):
     env = dict(
         os.environ,
         MPLBACKEND="Agg",          # headless: plt.show() becomes a no-op
         PYTHONIOENCODING="utf-8",  # the script prints non-ASCII (²,→); avoid cp1252 crash
+        # Redirect plot output so the run doesn't overwrite the committed
+        # reference plots in benchmark/results/ with new timestamps/IDs.
+        TES_VALIDATION_OUT_DIR=str(tmp_path),
     )
     proc = subprocess.run(
         [sys.executable, str(SCRIPT)],
