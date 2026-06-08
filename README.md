@@ -111,6 +111,22 @@ thermal-energy-storage-1d/
 └── requirements_ui.txt
 ```
 
+## Tests
+
+The core test suite is self-contained (no measurement data required) and covers
+energy/mass conservation, analytical verification (conduction, exponential
+cooling, plug-flow advection front), the TDMA solver, convective adjustment,
+auto sub-stepping, and a golden-scenario regression:
+
+```bash
+pip install -e .[test]
+pytest
+```
+
+The optional Dronninglund validation regression in `tests/test_validation.py`
+runs only when the measurement data is present (see [Validation](#validation)),
+otherwise it is skipped.
+
 ## Benchmarks
 
 Run the model-variant comparison (no external dependencies needed):

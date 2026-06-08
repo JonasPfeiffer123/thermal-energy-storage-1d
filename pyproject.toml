@@ -19,9 +19,16 @@ ui = [
     "PyQt6>=6.4.0",
     "matplotlib>=3.7.0",
 ]
+test = [
+    "pytest>=7.0",
+]
 
 [tool.setuptools.packages.find]
 include = ["thermal_energy_storage_model*"]
 
 [tool.setuptools.package-data]
 "thermal_energy_storage_model" = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["error::RuntimeWarning"]
