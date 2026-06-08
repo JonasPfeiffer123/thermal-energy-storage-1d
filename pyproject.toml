@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "thermal-energy-storage-1d"
-version = "0.1.0"
+dynamic = ["version"]
 description = "1D finite-volume model of a stratified hot-water thermal energy storage tank"
 readme = "README.md"
 license = { text = "GPL-3.0-or-later" }
@@ -22,6 +22,9 @@ ui = [
 test = [
     "pytest>=7.0",
 ]
+
+[tool.setuptools.dynamic]
+version = { attr = "thermal_energy_storage_model.__version__" }
 
 [tool.setuptools.packages.find]
 include = ["thermal_energy_storage_model*"]

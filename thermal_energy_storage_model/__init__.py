@@ -1,5 +1,8 @@
 """Public API for the thermal_energy_storage_model package."""
 
+# Single source of truth for the package version (pyproject.toml reads this).
+__version__ = "0.1.0"
+
 from .config import StorageConfig
 from .diffusors import DiffusorModel, PointDiffusor, UniformDiffusor
 from .fluids import ConstantFluidProperties, FluidProperties, WaterProperties
@@ -22,6 +25,7 @@ from .state import StorageInputs, StorageOutputs, StorageState
 from .model import ThermalStorage1D
 
 __all__ = [
+    "__version__",
     "GeometryModel",
     "CylinderGeometry",
     "TruncatedConeGeometry",

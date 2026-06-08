@@ -1,0 +1,49 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata below."
+title: "thermal-energy-storage-1d: A 1D finite-volume model of a stratified thermal energy storage tank"
+abstract: >-
+  A 1D finite-volume model of a stratified hot-water thermal energy storage
+  (TES) tank, designed for coupling with district heating network simulation
+  tools. Features explicit and implicit time integration, upwind and TVD
+  advection schemes, convective adjustment, flexible hydraulic and heat-exchanger
+  ports, and validation against the Dronninglund and Høje Taastrup pit thermal
+  energy storage sites.
+type: software
+authors:
+  - family-names: Pfeiffer
+    given-names: Jonas
+    email: jonas.pfeiffer@hszg.de
+    affiliation: "University of Applied Sciences Zittau/Görlitz"
+    orcid: "https://orcid.org/0009-0003-2913-7289"
+version: 0.1.0
+date-released: "2026-06-08"
+license: GPL-3.0-or-later
+repository-code: "https://github.com/JonasPfeiffer123/thermal-energy-storage-1d"
+url: "https://github.com/JonasPfeiffer123/thermal-energy-storage-1d"
+keywords:
+  - thermal energy storage
+  - stratified storage
+  - district heating
+  - co-simulation
+  - finite volume method
+  - pit thermal energy storage
+# Once archived on Zenodo, add the version DOI here so it is cited automatically:
+# doi: "10.5281/zenodo.XXXXXXX"
+references:
+  - type: conference-paper
+    title: >-
+      Modular 1D Stratified Thermal Energy Storage Model with Multi-Port
+      Interface for District Heating Co-Simulation: Design and Validation
+    authors:
+      - family-names: Pfeiffer
+        given-names: Jonas
+        affiliation: "University of Applied Sciences Zittau/Görlitz"
+        orcid: "https://orcid.org/0009-0003-2913-7289"
+    conference:
+      name: "EuroSun 2026"
+    year: 2026
+    notes: >-
+      Extended abstract accepted (submitted 2026-03-26); describes and
+      validates the model implemented in this repository. The full paper
+      is forthcoming — update this entry with DOI/proceedings details
+      once published.

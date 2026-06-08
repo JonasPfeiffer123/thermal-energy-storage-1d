@@ -192,6 +192,31 @@ m_k · cp · dT_k/dt = Q_adv,k + Q_cond,k + Q_loss,k
 
 See [docs/physics.md](docs/physics.md) for the full derivation.
 
+## Citation
+
+If you use this software in academic work, please cite it. Citation metadata is
+provided in [CITATION.cff](CITATION.cff) — GitHub renders a "Cite this repository"
+button from it, and tools such as `cffconvert` can export BibTeX:
+
+```bash
+pip install cffconvert
+cffconvert --format bibtex
+```
+
+### Archiving a citable release (Zenodo DOI)
+
+To obtain a permanent, citable DOI for a release:
+
+1. Sign in to [Zenodo](https://zenodo.org) with GitHub and enable archiving for
+   this repository under *Settings → GitHub*.
+2. Create a tagged release on GitHub (e.g. `v0.1.0`). Zenodo automatically
+   archives the release and mints a version DOI plus a concept DOI that always
+   resolves to the latest version.
+3. Add the resulting DOI to the `doi:` field in [CITATION.cff](CITATION.cff) and
+   the version badge to this README, then update the [CHANGELOG.md](CHANGELOG.md).
+
+See [CHANGELOG.md](CHANGELOG.md) for the version history.
+
 ## Funding
 
 This work was developed as part of the EFRE/ESF-funded Junior Research Group **"Energy Storage"** at [Hochschule Zittau/Görlitz](https://www.hszg.de). The project aims at developing a modular simulation model for co-simulation with district heating network tools (e.g. pandapipes).
