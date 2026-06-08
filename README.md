@@ -147,6 +147,12 @@ python benchmark/benchmark_model_variants.py --freetttes-src /path/to/FreeTTES/s
 
 or omit FreeTTES with `--no-freetttes`.
 
+The model has additionally been compared against the stratified-tank models from
+[modelica-ibpsa](https://github.com/ibpsa/modelica-ibpsa) and
+[mtype340](https://github.com/mrcjkb/mtype340) (TRNSYS Type 340), producing
+similar results; a detailed write-up of this comparison is planned for the
+forthcoming paper (see [Citation](#citation)).
+
 ## Validation
 
 Validation against two real pit thermal energy storage sites:
