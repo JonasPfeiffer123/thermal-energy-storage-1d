@@ -217,7 +217,7 @@ To obtain a permanent, citable DOI for a release:
 
 1. Sign in to [Zenodo](https://zenodo.org) with GitHub and enable archiving for
    this repository under *Settings → GitHub*.
-2. Create a tagged release on GitHub (e.g. `v0.1.0`). Zenodo automatically
+2. Create a tagged release on GitHub (e.g. `v1.0.0`). Zenodo automatically
    archives the release and mints a version DOI plus a concept DOI that always
    resolves to the latest version.
 3. Add the resulting DOI to the `doi:` field in [CITATION.cff](CITATION.cff) and

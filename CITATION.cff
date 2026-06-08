@@ -15,7 +15,7 @@ authors:
     email: jonas.pfeiffer@hszg.de
     affiliation: "University of Applied Sciences Zittau/Görlitz"
     orcid: "https://orcid.org/0009-0003-2913-7289"
-version: 0.2.0
+version: 1.0.0
 date-released: "2026-06-08"
 license: GPL-3.0-or-later
 repository-code: "https://github.com/JonasPfeiffer123/thermal-energy-storage-1d"
