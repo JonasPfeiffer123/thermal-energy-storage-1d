@@ -27,8 +27,7 @@ keywords:
   - co-simulation
   - finite volume method
   - pit thermal energy storage
-# Once archived on Zenodo, add the version DOI here so it is cited automatically:
-# doi: "10.5281/zenodo.XXXXXXX"
+doi: "10.5281/zenodo.20595165"
 references:
   - type: conference-paper
     title: >-

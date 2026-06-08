@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.0.0] - 2026-06-08
 
+Archived on Zenodo: [10.5281/zenodo.20595165](https://doi.org/10.5281/zenodo.20595165)
+
 ### Added
 - Initial public release of the 1D finite-volume stratified thermal energy
   storage model.

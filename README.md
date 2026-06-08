@@ -1,6 +1,7 @@
 # thermal-energy-storage-1d
 
 [![Tests](https://github.com/JonasPfeiffer123/thermal-energy-storage-1d/actions/workflows/tests.yml/badge.svg)](https://github.com/JonasPfeiffer123/thermal-energy-storage-1d/actions/workflows/tests.yml)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20595165.svg)](https://doi.org/10.5281/zenodo.20595165)
 
 A 1D finite-volume model of a stratified hot-water thermal energy storage (TES) tank, designed for coupling with district heating network simulation tools.
 
