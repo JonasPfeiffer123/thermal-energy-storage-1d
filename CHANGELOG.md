@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-08
+
 ### Added
 - Automatic CFL sub-stepping for the explicit solver (`StorageConfig.auto_substep`,
   default `True`): an over-large external timestep is split internally into the
@@ -42,5 +44,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Validation against the Dronninglund (2014) and Høje Taastrup (2024) PTES sites,
   benchmark comparison against FreeTTES, and an interactive PyQt6 UI.
 
-[Unreleased]: https://github.com/JonasPfeiffer123/thermal-energy-storage-1d/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/JonasPfeiffer123/thermal-energy-storage-1d/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/JonasPfeiffer123/thermal-energy-storage-1d/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/JonasPfeiffer123/thermal-energy-storage-1d/releases/tag/v0.1.0
