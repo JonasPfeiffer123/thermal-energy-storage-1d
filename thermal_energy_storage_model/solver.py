@@ -14,7 +14,7 @@ from .geometry import CylinderGeometry, GeometryModel
 from .losses import ConstantAmbientLoss, LossModel
 from .presets import StoragePresets
 from .state import StorageInputs, StorageOutputs, StorageState
-from .ports import HeatExchangerPort, Port
+from .ports import HeatExchangerPort
 
 # ---------------------------------------------------------------------------
 # Core model
@@ -1103,22 +1103,6 @@ class ThermalStorage1D:
     # ------------------------------------------------------------------
     # Port helper methods
     # ------------------------------------------------------------------
-
-    def _port_to_node(self, port: "Port") -> int:
-        """
-        Return nearest node index for a given port height.
-
-        Parameters
-        ----------
-        port : Port
-            Port with height coordinate z [m] above tank bottom.
-
-        Returns
-        -------
-        int
-            Index of nearest node (0 = top, N-1 = bottom).
-        """
-        return int(np.argmin(np.abs(self._z_nodes - port.z)))
 
     def _compute_inter_node_fluxes(self, ports: list) -> np.ndarray:
         """

@@ -67,11 +67,11 @@ class DiffusorModel:
 
 
 class PointDiffusor(DiffusorModel):
-    """
+    r"""
     Point diffusor: full mass flow assigned to the nearest node.
 
     This is the default model and matches previous behavior.
-    No overhead compared to the former ``_port_to_node`` approach.
+    No overhead compared to a direct nearest-node lookup.
 
     Suitable for
     ------------

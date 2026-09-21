@@ -23,10 +23,13 @@ Arbeitsweise: ein Item = ein Commit, Checkbox wird im selben Commit abgehakt.
       das Diffusor-Modell wird tankweit über `StorageConfig.diffusor_model`
       gesetzt. Beispiel korrigieren und explizit dokumentieren, dass der
       Diffusor pro Tank (nicht pro Port) gilt.
-- [ ] **Toter Code entfernen.** `_port_to_node()`
+- [x] **Toter Code entfernen.** `_port_to_node()`
       (`thermal_energy_storage_model/solver.py:1107`) wird nirgends mehr
       aufgerufen (durch `DiffusorModel.node_weights()` ersetzt), nur noch in
       einem Kommentar in `diffusors.py:74` erwähnt. Entfernen.
+      *(nebenbei gefunden: `PointDiffusor`-Docstring erzeugte eine
+      `SyntaxWarning: invalid escape sequence '\D'` durch LaTeX in einem
+      Nicht-Raw-String – auf `r"""..."""` umgestellt.)*
 
 ## P1 – Testabdeckung (Hauptbefund)
 
