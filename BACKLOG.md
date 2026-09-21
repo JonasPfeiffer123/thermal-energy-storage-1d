@@ -58,13 +58,16 @@ optionalen, standardmäßig übersprungenen Validierungsskripte berühren sie.
       `from_slope()`-Konstruktor, Validierungsfehler.
       (`tests/test_geometry.py`; Volumenformel zusätzlich unabhängig per
       Simpson-Integration von A(z)=a(z)·b(z) verifiziert.)
-- [ ] Tests für `SplitAmbientLoss`: Lid-Knoten nutzt `U_lid`/`T_ambient_lid`,
+- [x] Tests für `SplitAmbientLoss`: Lid-Knoten nutzt `U_lid`/`T_ambient_lid`,
       übrige Knoten `U_wall`/`T_ambient`, Fallback wenn `T_ambient_lid=None`.
-- [ ] Tests für `GroundTemperatureLoss`: `T_ground_at_depth`-Formel
+- [x] Tests für `GroundTemperatureLoss`: `T_ground_at_depth`-Formel
       (Exponentialansatz), Tiefenabhängigkeit pro Knoten, Validierungsfehler.
-- [ ] Tests für `TransientGroundLoss`: RC-Kette konvergiert im Steady State
+- [x] Tests für `TransientGroundLoss`: RC-Kette konvergiert im Steady State
       gegen den erwarteten Wert, Lid bleibt stationär (nicht Teil der
       Zeitintegration), `advance()`-Energiebilanz, Re-Init bei Knotenzahl-Wechsel.
+      (`tests/test_losses.py`; Steady-State-Fixpunkt analytisch hergeleitet
+      und empirisch gegen einen konvergierten Langzeitlauf verifiziert, bevor
+      er als Assertion verwendet wurde. `losses.py`-Coverage: 27 % → 99 %.)
 - [ ] Tests für `UniformDiffusor`: Gewichte summieren zu 1, Gleichverteilung
       über `H_zone`, Fallback auf nächsten Knoten bei zu grobem Grid.
 - [ ] Tests für `HeatExchangerPort` lumped-Modus: ε-NTU-Formel, Energiebilanz
