@@ -51,10 +51,10 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     except AttributeError:
         pass
 
+import matplotlib.dates as mdates
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA_FILE = (
@@ -67,12 +67,12 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 sys.path.insert(0, str(ROOT))
 from thermal_energy_storage_model import (
+    Port,
+    SplitAmbientLoss,
     StorageConfig,
     StorageInputs,
-    Port,
     ThermalStorage1D,
     TruncatedPyramidGeometry,
-    SplitAmbientLoss,
     WaterProperties,
 )
 

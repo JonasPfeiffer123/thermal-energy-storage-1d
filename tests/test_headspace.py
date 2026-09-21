@@ -10,7 +10,6 @@ end through ``step()``.
 
 from __future__ import annotations
 
-import numpy as np
 import pytest
 
 from thermal_energy_storage_model import StorageConfig, StorageInputs, ThermalStorage1D

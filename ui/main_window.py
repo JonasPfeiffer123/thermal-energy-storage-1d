@@ -14,11 +14,11 @@ import csv
 import json
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import ClassVar
 
 import numpy as np
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QAction, QIcon, QKeySequence
+from PyQt6.QtGui import QAction, QKeySequence
 from PyQt6.QtWidgets import (
     QDockWidget,
     QFileDialog,
@@ -26,15 +26,12 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QSplitter,
-    QStatusBar,
     QToolBar,
-    QWidget,
 )
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from thermal_energy_storage_model import StorageConfig, ThermalStorage1D
-
 from ui.config_panel import ConfigPanel
 from ui.plots_widget import PlotsWidget
 from ui.sim_control import SimControlWidget
@@ -49,8 +46,9 @@ class MainWindow(QMainWindow):
     Connects all UI components and manages the simulation workflow.
     """
 
-    # Port definitions for 3D visualisation (default: two-circuit)
-    _DEFAULT_PORTS = [
+    # Port definitions for 3D visualisation (default: two-circuit). Read-only:
+    # never mutated, only iterated -- annotated ClassVar so it stays that way.
+    _DEFAULT_PORTS: ClassVar[list[dict[str, str | float]]] = [
         {"type": "charge_in",    "label": "Charging in",   "z_frac": 1.0},
         {"type": "charge_out",   "label": "Charging out",  "z_frac": 0.0},
         {"type": "discharge_in", "label": "Discharging in","z_frac": 0.0},
@@ -59,9 +57,9 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self._storage: Optional[ThermalStorage1D] = None
-        self._worker: Optional[SimulationWorker] = None
-        self._current_config: Optional[StorageConfig] = None
+        self._storage: ThermalStorage1D | None = None
+        self._worker: SimulationWorker | None = None
+        self._current_config: StorageConfig | None = None
 
         # History data for export
         self._history_times: list[float] = []
@@ -69,7 +67,7 @@ class MainWindow(QMainWindow):
         self._history_outputs: list = []
 
         # Buffered 3D data for timer-based rendering
-        self._pending_3d: Optional[dict] = None   # {config, T, T_lo, T_hi, ports}
+        self._pending_3d: dict | None = None   # {config, T, T_lo, T_hi, ports}
         self._viz3d_timer = QTimer(self)
         self._viz3d_timer.setInterval(300)        # max. ~3 Hz frame rate
         self._viz3d_timer.timeout.connect(self._flush_3d_update)
@@ -507,7 +505,6 @@ class MainWindow(QMainWindow):
         # Determine current phase
         for ph in phases:
             if ph.mode in ("charge", "both"):
-                from thermal_energy_storage_model import WaterProperties
                 cp = 4187.0
                 T_c_out = T[-1]
                 Q_charge = ph.m_dot_charge * cp * abs(ph.T_charge_in - T_c_out)
@@ -764,9 +761,13 @@ class MainWindow(QMainWindow):
     def _dict_to_config(self, d: dict) -> StorageConfig:
         """Reconstruct a StorageConfig from a dict (simple)."""
         from thermal_energy_storage_model import (
-            ConstantAmbientLoss, ConstantFluidProperties,
-            CylinderGeometry, GroundTemperatureLoss,
-            SplitAmbientLoss, TruncatedConeGeometry, WaterProperties,
+            ConstantAmbientLoss,
+            ConstantFluidProperties,
+            CylinderGeometry,
+            GroundTemperatureLoss,
+            SplitAmbientLoss,
+            TruncatedConeGeometry,
+            WaterProperties,
         )
         gd = d.get("geometry", {})
         if gd.get("type") == "cone":

@@ -142,9 +142,23 @@ nicht weiter verfolgt, da geringer Grenznutzen.
 
 ## P4 – Engineering-Prozess
 
-- [ ] Lint/Type-Check-Schritt in CI (`.github/workflows/tests.yml` hat nur
+- [x] Lint/Type-Check-Schritt in CI (`.github/workflows/tests.yml` hat nur
       `pytest`, kein ruff/mypy trotz `py.typed`-Marker in
       `thermal_energy_storage_model/py.typed`).
+
+      `ruff` (Default-Regelsatz: E4/E7/E9/F/UP/I/SIM/RUF u. a.) und `mypy`
+      als neue `[project.optional-dependencies].lint`-Gruppe ergänzt,
+      repoweit sauber gezogen (173 Befunde: 102 automatisch, Rest manuell
+      behoben oder mit begründetem Per-File-Ignore versehen – z. B.
+      `BLE001`/`S110` in `ui/*` und `benchmark/*` für bewusst breite
+      Exception-Behandlung in Live-Preview- bzw. Best-Effort-Codepfaden,
+      `C408` in `tests/*` für den etablierten `dict(...)`-Stil). `mypy`
+      auf `thermal_energy_storage_model/` beschränkt (6 Typfehler gefunden
+      und behoben, u. a. `_ensure_init()` in `TransientGroundLoss` gibt das
+      Array jetzt zurück statt `Optional`-Attribut erneut zu lesen). Neuer
+      `lint`-Job in `.github/workflows/tests.yml` (Python 3.12, separat von
+      der Test-Matrix, da mypy neuere numpy-Stubs mit Py3.12-only-Syntax
+      nicht unter einem erzwungenen `python_version=3.10` parsen kann).
 
 ## Bewusst zurückgestellt
 

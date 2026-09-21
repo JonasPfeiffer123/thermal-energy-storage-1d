@@ -10,7 +10,6 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -19,7 +18,6 @@ from PyQt6.QtCore import QThread, pyqtSignal
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from thermal_energy_storage_model import (
-    StorageConfig,
     StorageInputs,
     StorageOutputs,
     StorageState,
@@ -62,10 +60,10 @@ class SimPhase:
     T_charge_in: float = 85.0
     m_dot_discharge: float = 0.0
     T_discharge_in: float = 45.0
-    z_charge_in: Optional[float] = None
-    z_charge_out: Optional[float] = None
-    z_discharge_in: Optional[float] = None
-    z_discharge_out: Optional[float] = None
+    z_charge_in: float | None = None
+    z_charge_out: float | None = None
+    z_discharge_in: float | None = None
+    z_discharge_out: float | None = None
 
     def label(self) -> str:
         """Returns a human-readable label for the phase."""
@@ -169,7 +167,7 @@ class SimulationWorker(QThread):
                 inputs = self._build_inputs(phase, self.storage.config.height)
 
                 # Number of nominal timesteps in this phase
-                n_steps = max(1, int(round(phase.duration / self.dt)))
+                n_steps = max(1, round(phase.duration / self.dt))
                 actual_dt = phase.duration / n_steps
 
                 # Check CFL and compute sub-steps

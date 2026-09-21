@@ -8,7 +8,6 @@ caloric mixing. It must (a) conserve energy (mass-weighted mean) and
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from thermal_energy_storage_model import ThermalStorage1D
 

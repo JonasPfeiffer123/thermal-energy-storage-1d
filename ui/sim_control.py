@@ -25,9 +25,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QProgressBar,
     QPushButton,
-    QSizePolicy,
     QSpinBox,
-    QSplitter,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -36,7 +34,6 @@ from PyQt6.QtWidgets import (
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from ui.simulation_worker import SimPhase
-
 
 # Column index constants for the phase table
 _COL_MODE = 0

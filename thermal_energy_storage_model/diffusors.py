@@ -43,7 +43,7 @@ class DiffusorModel:
 
     def node_weights(
         self,
-        port: "Port",
+        port: Port,
         node_heights: np.ndarray,
     ) -> list[tuple[int, float]]:
         """
@@ -63,7 +63,7 @@ class DiffusorModel:
             List of ``(node_index, weight)`` pairs.
             Weights must sum to 1.0.
         """
-        raise NotImplementedError  # noqa: ARG002
+        raise NotImplementedError
 
 
 class PointDiffusor(DiffusorModel):
@@ -81,7 +81,7 @@ class PointDiffusor(DiffusorModel):
 
     def node_weights(
         self,
-        port: "Port",
+        port: Port,
         node_heights: np.ndarray,
     ) -> list[tuple[int, float]]:
         k = int(np.argmin(np.abs(node_heights - port.z)))
@@ -120,7 +120,7 @@ class UniformDiffusor(DiffusorModel):
 
     def node_weights(
         self,
-        port: "Port",
+        port: Port,
         node_heights: np.ndarray,
     ) -> list[tuple[int, float]]:
         dists = np.abs(node_heights - port.z)
