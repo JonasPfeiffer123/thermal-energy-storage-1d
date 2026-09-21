@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Publications section in the README and a poster reference in
+  `CITATION.cff`, linking the EuroSun 2026 poster archived on ResearchGate
+  (DOI: 10.13140/RG.2.2.14082.44481).
+
 ## [1.0.0] - 2026-06-08
 
 Archived on Zenodo: [10.5281/zenodo.20595165](https://doi.org/10.5281/zenodo.20595165)

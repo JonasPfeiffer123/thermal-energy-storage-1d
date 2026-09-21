@@ -41,8 +41,9 @@ references:
     conference:
       name: "EuroSun 2026"
     year: 2026
+    doi: "10.13140/RG.2.2.14082.44481"
     notes: >-
       Extended abstract accepted (submitted 2026-03-26); describes and
-      validates the model implemented in this repository. The full paper
-      is forthcoming — update this entry with DOI/proceedings details
-      once published.
+      validates the model implemented in this repository. Poster archived
+      on ResearchGate (DOI above). The full paper is forthcoming — update
+      this entry with the proceedings DOI once published.

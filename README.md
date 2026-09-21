@@ -201,6 +201,13 @@ m_k · cp · dT_k/dt = Q_adv,k + Q_cond,k + Q_loss,k
 
 See [docs/physics.md](docs/physics.md) for the full derivation.
 
+## Publications
+
+- Pfeiffer, J. (2026). *Modular 1D Stratified Thermal Energy Storage Model
+  with Multi-Port Interface for District Heating Co-Simulation: Design and
+  Validation.* Poster presented at EuroSun 2026.
+  DOI: [10.13140/RG.2.2.14082.44481](https://doi.org/10.13140/RG.2.2.14082.44481)
+
 ## Citation
 
 If you use this software in academic work, please cite it. Citation metadata is
