@@ -47,12 +47,17 @@ Alle PTES-relevanten Pfade (genau das, was gegen Dronninglund/Høje Taastrup
 validiert wird) laufen im CI-sicheren Teil der Suite nie durch – nur die
 optionalen, standardmäßig übersprungenen Validierungsskripte berühren sie.
 
-- [ ] Tests für `TruncatedConeGeometry`: Volumenformel, `V_nodes`-Summe =
+- [x] Tests für `TruncatedConeGeometry`: Volumenformel, `V_nodes`-Summe =
       Gesamtvolumen, `A_wall_nodes`, Entartungsfall `r_top == r_bottom` ≙
       Zylinder, Validierungsfehler bei `r <= 0`/`height <= 0`.
-- [ ] Tests für `TruncatedPyramidGeometry`: Volumenformel (analytische
+      (`tests/test_geometry.py`, dabei auch `CylinderGeometry`-Konstruktor-
+      /Validierungspfade mitgetestet, die vorher ebenfalls ungetestet waren.
+      `geometry.py`-Coverage: 42 % → 97 %.)
+- [x] Tests für `TruncatedPyramidGeometry`: Volumenformel (analytische
       Integration), `V_nodes`-Summe = Gesamtvolumen, `A_wall_nodes`,
       `from_slope()`-Konstruktor, Validierungsfehler.
+      (`tests/test_geometry.py`; Volumenformel zusätzlich unabhängig per
+      Simpson-Integration von A(z)=a(z)·b(z) verifiziert.)
 - [ ] Tests für `SplitAmbientLoss`: Lid-Knoten nutzt `U_lid`/`T_ambient_lid`,
       übrige Knoten `U_wall`/`T_ambient`, Fallback wenn `T_ambient_lid=None`.
 - [ ] Tests für `GroundTemperatureLoss`: `T_ground_at_depth`-Formel
