@@ -73,12 +73,29 @@ optionalen, standardmäßig übersprungenen Validierungsskripte berühren sie.
       (`tests/test_diffusors.py`, inkl. Solver-Integrationstest: Inflow
       verteilt sich nachweislich auf mehrere Knoten, Energieerhaltung bleibt
       erhalten. `diffusors.py`-Coverage: 52 % → 96 %.)
-- [ ] Tests für `HeatExchangerPort` lumped-Modus: ε-NTU-Formel, Energiebilanz
+- [x] Tests für `HeatExchangerPort` lumped-Modus: ε-NTU-Formel, Energiebilanz
       (Wärmeeintrag in Tank = Enthalpieänderung des externen Kreises),
-      mehrere gleichzeitige HX-Ports.
-- [ ] Tests für `HeatExchangerPort` segmented-Modus: knotenweise NTU-Aufteilung,
+      mehrere gleichzeitige HX-Ports. (`tests/test_heat_exchanger.py`)
+- [x] Tests für `HeatExchangerPort` segmented-Modus: knotenweise NTU-Aufteilung,
       `flow_direction="downward"` vs. `"upward"`, Konsistenz mit lumped-Modus
       im homogenen Temperaturfeld (beide Modi müssen dort gleiches Ergebnis liefern).
+      (`tests/test_heat_exchanger.py`)
+
+      **Dabei echten Bug gefunden und gefixt:** `flow_direction` war in
+      `solver.py::_compute_hx_source_terms` (segmented-Zweig) invertiert.
+      Für den **Standardwert** `"downward"` (laut Docstring/physics.md:
+      "Entry at top, exit at bottom") verarbeitete der Code den Knoten am
+      **unteren** Zonenrand zuerst statt am oberen – exakt umgekehrt zur
+      dokumentierten und physikalisch beabsichtigten Semantik. Betraf jeden
+      Nutzer des segmentierten Modus über eine Thermokline hinweg (bei
+      homogener Zonentemperatur ist der Fehler unsichtbar, da dort Summe und
+      `T_ext_out` unabhängig von der Reihenfolge sind – vermutlich deshalb
+      bei Implementierung nicht aufgefallen). Fix: `reverse`-Bedingung in
+      der Sortierung umgedreht. Da vorher **keine** Tests für den
+      segmented-Modus existierten (0 % Coverage, siehe Analyse oben), war
+      der Bug unsichtbar. Regressionstest pinnt jetzt explizit fest, welcher
+      Zonenknoten den vollen `T_ext_in`-Antrieb sieht (der zuerst
+      durchströmte), statt nur ein Aggregat zu prüfen.
 - [ ] Tests für das Headspace-Modell: Energiebilanz
       `C_hs dT_hs/dt = -Q_roof - Q_hs_water`, Wärmeeintrag in obersten
       Wasserknoten, Konsistenzcheck mit `state.T_headspace`.

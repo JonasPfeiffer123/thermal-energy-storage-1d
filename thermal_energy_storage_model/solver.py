@@ -1481,7 +1481,9 @@ class ThermalStorage1D:
                 # --- Segmented model ---
                 # Sort nodes in external-fluid flow direction.
                 # _z_nodes[0] = top (z=H), _z_nodes[N-1] = bottom (z=0).
-                reverse = (hx.flow_direction == "upward")
+                # "downward": enters at top (high z) -> descending z -> reverse=True.
+                # "upward":   enters at bottom (low z) -> ascending z -> reverse=False.
+                reverse = (hx.flow_direction == "downward")
                 ordered_nodes = sorted(
                     [k for k, _ in weights],
                     key=lambda k: self._z_nodes[k],
