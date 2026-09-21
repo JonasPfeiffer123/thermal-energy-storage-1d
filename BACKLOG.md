@@ -96,9 +96,13 @@ optionalen, standardmäßig übersprungenen Validierungsskripte berühren sie.
       der Bug unsichtbar. Regressionstest pinnt jetzt explizit fest, welcher
       Zonenknoten den vollen `T_ext_in`-Antrieb sieht (der zuerst
       durchströmte), statt nur ein Aggregat zu prüfen.
-- [ ] Tests für das Headspace-Modell: Energiebilanz
+- [x] Tests für das Headspace-Modell: Energiebilanz
       `C_hs dT_hs/dt = -Q_roof - Q_hs_water`, Wärmeeintrag in obersten
       Wasserknoten, Konsistenzcheck mit `state.T_headspace`.
+      (`tests/test_headspace.py`; zusätzlich kombinierte Energiebilanz
+      Wasser+Headspace über mehrere Schritte gegen die aufintegrierte
+      Dachverlustleistung verifiziert, `dE_water + dE_headspace ==
+      -Σ Q_roof·dt`, für expliziten und impliziten Solver.)
 - [ ] Tests für `StoragePresets.steel_tank_buried` und `.ptes` (bisher nur
       `steel_tank_aboveground` indirekt geprüft).
 - [ ] Tests für bislang unbenutzte Public API: `check_cfl()`, `get_soc()`,
