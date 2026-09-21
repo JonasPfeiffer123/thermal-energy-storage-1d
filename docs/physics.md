@@ -646,9 +646,18 @@ $$S_k = \frac{\dot{m}}{n_\text{zone}}, \quad \text{for all } k \text{ with } |z_
 
 This approximates the horizontal spreading of the inlet jet over the diffusor height and produces — in contrast to the point diffusor — a shallower temperature gradient in the inflow zone. The approach comes closer to the Lagrangian behaviour of FreeTTES in the inlet zone without explicitly modelling the inversion plume physics (cf. Section 4, model limitation).
 
+**Scope:** the diffusor model is a `StorageConfig` setting and therefore applies to
+*all* ports of a tank uniformly — it is not configured per `Port` instance. A
+single storage cannot currently mix a `PointDiffusor` inlet with a
+`UniformDiffusor` inlet in the same run.
+
 ```python
-port = Port(z=9.5, m_dot=+80.0, T_in=90.0,
-            diffusor=UniformDiffusor(H_zone=1.0))
+config = StorageConfig(
+    volume=500.0, height=15.0,
+    diffusor_model=UniformDiffusor(H_zone=1.0),
+)
+storage = ThermalStorage1D(config)
+inputs = StorageInputs(ports=[Port(z=9.5, m_dot=+80.0, T_in=90.0)])
 ```
 
 ---
