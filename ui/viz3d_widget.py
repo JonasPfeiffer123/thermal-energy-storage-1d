@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 from typing import ClassVar
 
-import matplotlib.cm as mcm
+import matplotlib as mpl
 import numpy as np
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavToolbar
@@ -59,7 +59,10 @@ class Tank3DWidget(QWidget):
         self._config: StorageConfig | None = None
         self._sm: ScalarMappable | None = None   # for colorbar
         self._norm: Normalize | None = None
-        self._cmap_fn = mcm.get_cmap("RdYlBu_r")
+        # matplotlib.cm.get_cmap() was removed in matplotlib >= 3.11;
+        # matplotlib.colormaps[...] is the supported replacement (available
+        # since 3.5, well within this project's matplotlib>=3.7.0 floor).
+        self._cmap_fn = mpl.colormaps["RdYlBu_r"]
         self._colorbar = None
         self._placeholder_active = True
         self._setup_ui()
