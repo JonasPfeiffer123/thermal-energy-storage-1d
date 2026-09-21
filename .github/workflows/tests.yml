@@ -19,3 +19,18 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: pip install -e ".[test]"
       - run: pytest
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          # Pinned (not matrixed): mypy's parser chokes on newer numpy's
+          # 3.12-only stub syntax under an older forced python_version, so
+          # type-checking runs under one representative interpreter rather
+          # than the full test matrix. See [tool.mypy] in pyproject.toml.
+          python-version: "3.12"
+      - run: pip install -e ".[lint]"
+      - run: ruff check .
+      - run: mypy
