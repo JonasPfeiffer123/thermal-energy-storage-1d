@@ -103,8 +103,10 @@ optionalen, standardmäßig übersprungenen Validierungsskripte berühren sie.
       Wasser+Headspace über mehrere Schritte gegen die aufintegrierte
       Dachverlustleistung verifiziert, `dE_water + dE_headspace ==
       -Σ Q_roof·dt`, für expliziten und impliziten Solver.)
-- [ ] Tests für `StoragePresets.steel_tank_buried` und `.ptes` (bisher nur
-      `steel_tank_aboveground` indirekt geprüft).
+- [x] Tests für `StoragePresets.steel_tank_buried` und `.ptes` (bisher nur
+      `steel_tank_aboveground` indirekt geprüft). (`tests/test_presets.py`,
+      inkl. `ThermalStorage1D.from_preset()`, das ebenfalls ungetestet war.
+      `presets.py`-Coverage: 73 % → 100 %.)
 - [ ] Tests für bislang unbenutzte Public API: `check_cfl()`, `get_soc()`,
       `max_stable_dt()` (aktuell 0 Aufrufe in `tests/`).
 
