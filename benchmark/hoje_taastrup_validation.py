@@ -59,10 +59,10 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     except AttributeError:
         pass
 
+import matplotlib.dates as mdates
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA_FILE = (
@@ -75,13 +75,13 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 sys.path.insert(0, str(ROOT))
 from thermal_energy_storage_model import (
+    Port,
+    SplitAmbientLoss,
     StorageConfig,
     StorageInputs,
-    Port,
     ThermalStorage1D,
-    TruncatedPyramidGeometry,
-    SplitAmbientLoss,
     TransientGroundLoss,
+    TruncatedPyramidGeometry,
     WaterProperties,
 )
 
@@ -400,7 +400,7 @@ def compute_mae(df, T_sim_top, T_sim_mid, T_sim_bot, label: str = ""):
     print(f"  Middle ({H_DIFF_MID} m, {A_COL_MID}): {mae_mid:.2f} K")
     print(f"  Bottom ({H_DIFF_BOT} m, A_13.80m): {mae_bot:.2f} K")
     print(f"  Total:                      {mae_all:.2f} K")
-    return dict(top=mae_top, middle=mae_mid, bottom=mae_bot, total=mae_all)
+    return {"top": mae_top, "middle": mae_mid, "bottom": mae_bot, "total": mae_all}
 
 
 # ---------------------------------------------------------------------------
@@ -613,7 +613,7 @@ def main() -> None:
 
     # --- Simulation 2: TransientGroundLoss (1D RC ground network) ---
     print("\n--- TransientGroundLoss ---")
-    _, T_top_t, T_mid_t, T_bot_t, snaps_t, _ = run(build_storage_transient)
+    _, T_top_t, T_mid_t, T_bot_t, _snaps_t, _ = run(build_storage_transient)
     mae_t = compute_mae(df, T_top_t, T_mid_t, T_bot_t, label="TransientGroundLoss")
 
     # --- Summary ---

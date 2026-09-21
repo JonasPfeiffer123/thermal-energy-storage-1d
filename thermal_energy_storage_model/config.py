@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .diffusors import DiffusorModel
@@ -108,7 +108,7 @@ class StorageConfig:
     T_ambient: float = 10.0
     """Ambient temperature used for heat-loss calculation [°C]."""
 
-    geometry: Optional["GeometryModel"] = field(default=None, repr=False)
+    geometry: GeometryModel | None = field(default=None, repr=False)
     """
     Storage geometry model.
 
@@ -120,7 +120,7 @@ class StorageConfig:
     ``volume`` and ``height`` (backward compatibility).
     """
 
-    loss_model: Optional["LossModel"] = field(default=None, repr=False)
+    loss_model: LossModel | None = field(default=None, repr=False)
     """
     Storage loss model.
 
@@ -130,7 +130,7 @@ class StorageConfig:
     ``U_loss`` and ``T_ambient`` (backward compatibility).
     """
 
-    fluid: Optional["FluidProperties"] = field(default=None, repr=False)
+    fluid: FluidProperties | None = field(default=None, repr=False)
     """
     Fluid-property model for the storage.
 
@@ -174,7 +174,7 @@ class StorageConfig:
         No buoyancy model. Backward compatible with older versions.
     """
 
-    T_ground: Optional[float] = None
+    T_ground: float | None = None
     """
     Ground temperature for initialization of the bottom zone [°C].
 
@@ -254,7 +254,7 @@ class StorageConfig:
     ignores this flag.
     """
 
-    diffusor_model: Optional["DiffusorModel"] = field(default=None, repr=False)
+    diffusor_model: DiffusorModel | None = field(default=None, repr=False)
     """
     Diffusor mixing model for all ports.
 

@@ -7,13 +7,12 @@ against an exact (or near-exact) analytical solution.
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
+from tests._helpers import RHO
 from thermal_energy_storage_model import (
     ConstantAmbientLoss,
     StorageInputs,
 )
-from tests._helpers import RHO
 
 
 def test_pure_conduction_flattens_profile_monotonically(make_storage):

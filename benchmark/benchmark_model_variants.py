@@ -45,12 +45,12 @@ Usage
 
 from __future__ import annotations
 
-import sys
+import argparse
 import csv
 import json
+import sys
 import time
 import warnings
-import argparse
 
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     try:
@@ -60,12 +60,13 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
 
 from pathlib import Path
 
-import numpy as np
 import matplotlib
+import numpy as np
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.patches import Patch
 from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 BENCHMARK_DIR = Path(__file__).resolve().parent
@@ -79,22 +80,45 @@ sys.path.insert(0, str(PROJECT_DIR))
 sys.path.insert(0, str(FREETTTES_SRC))
 sys.path.insert(0, str(BENCHMARK_DIR))
 
-from thermal_energy_storage_model import (
-    StorageConfig, StorageInputs, ThermalStorage1D, UniformDiffusor,
-)
 from config_benchmark import (
-    R_INNER, H_WS, A_CROSS, V_TANK, U_WALL, T_AMB, T_REF_ENUTZ,
-    T_CHARGE_IN, T_DISCH_IN, FLOW_M3H,
-    H_B_UK_DIF, H_RS_DIF, H_WS_OK_DIF, Z_LOWER_DIFF, Z_UPPER_DIFF,
-    DT_S, N_HOURS, T_END_CHARGE, T_END_IDLE, T_END_DISCH,
-    T_BODEN, T_DR, START_PROFILE_FREETTTES,
-    m_charge, m_discharge,
+    DT_S,
+    FLOW_M3H,
+    H_B_UK_DIF,
+    H_RS_DIF,
+    H_WS,
+    H_WS_OK_DIF,
+    N_HOURS,
+    R_INNER,
+    START_PROFILE_FREETTTES,
+    T_AMB,
+    T_CHARGE_IN,
+    T_DISCH_IN,
+    T_DR,
+    T_END_CHARGE,
+    T_END_DISCH,
+    T_END_IDLE,
+    T_REF_ENUTZ,
+    U_WALL,
+    V_TANK,
+    Z_LOWER_DIFF,
+    Z_UPPER_DIFF,
+    m_charge,
+    m_discharge,
 )
 from shared_utils import (
-    rho_water, m3h_to_kgs, compute_useful_energy_MWh,
-    interpolate_start_profile, print_separator, phase_of, ZeroDStorage,
+    ZeroDStorage,
+    compute_useful_energy_MWh,
+    interpolate_start_profile,
+    phase_of,
+    print_separator,
 )
 
+from thermal_energy_storage_model import (
+    StorageConfig,
+    StorageInputs,
+    ThermalStorage1D,
+    UniformDiffusor,
+)
 
 try:
     import FreeTTES_model as freetttes
@@ -123,8 +147,8 @@ def _validate_freetttes_config() -> tuple[bool, str]:
     except Exception as exc:  # pragma: no cover - defensive for external repo
         return (
             False,
-            "  Could not load FreeTTES configuration "
-            f"(FreeTTES_config.ensure_initialized): {exc}",
+            ("  Could not load FreeTTES configuration "
+             f"(FreeTTES_config.ensure_initialized): {exc}"),
         )
 
     def _get_float(key: str) -> float | None:
@@ -777,7 +801,7 @@ def plot_timeseries_selection(all_results: list[dict], reference: dict | None,
             color="tomato", alpha=0.9)
 
     # Legend: add line style explanation
-    handles, labels = ax.get_legend_handles_labels()
+    handles, _labels = ax.get_legend_handles_labels()
     handles += [
         Line2D([0], [0], color="gray", linewidth=1.4, linestyle="-",
                label="── T_outlet (model)"),
@@ -931,7 +955,7 @@ def save_named_run(
 
     metadata = {
         "name":              name,
-        "timestamp":         datetime.now().isoformat(timespec="seconds"),
+        "timestamp":         datetime.now().astimezone().isoformat(timespec="seconds"),
         "git_branch":        branch,
         "git_commit":        commit,
         "include_freetttes":  include_freetttes,
@@ -1113,22 +1137,22 @@ def print_and_save_recommendation(all_results: list[dict],
     if zerod_metrics:
         mae_0d = zerod_metrics.get("mae", float("nan"))
         lines.append(
-            f"  The fully mixed 0D model (N=1) achieves a MAE of"
+            "  The fully mixed 0D model (N=1) achieves a MAE of"
         )
         lines.append(
             f"  {mae_0d:.2f} K relative to FreeTTES. It systematically underestimates"
         )
         lines.append(
-            f"  the outlet temperature during discharging (thermocline is not"
+            "  the outlet temperature during discharging (thermocline is not"
         )
         lines.append(
-            f"  preserved) and overestimates it during charging. For network simulations"
+            "  preserved) and overestimates it during charging. For network simulations"
         )
         lines.append(
-            f"  where supply and return temperatures directly affect heat pump load"
+            "  where supply and return temperatures directly affect heat pump load"
         )
         lines.append(
-            f"  and network hydraulics, this deviation is significant."
+            "  and network hydraulics, this deviation is significant."
         )
     else:
         lines.append(
@@ -1149,7 +1173,7 @@ def print_and_save_recommendation(all_results: list[dict],
             f"  Model:     {best_impl['label']}",
             f"  MAE:       {mae_best:.2f} K vs. FreeTTES",
             f"  Speed:     {ms_best:.3f} ms/step  ({su_best} faster than FreeTTES)",
-            f"  Stability: unconditionally stable, no sub-stepping",
+            "  Stability: unconditionally stable, no sub-stepping",
             "",
             "  This model offers the best trade-off between accuracy,",
             "  stability and computational cost for co-simulation.",

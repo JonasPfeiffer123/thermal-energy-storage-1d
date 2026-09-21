@@ -12,13 +12,11 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavToolbar
 from matplotlib.figure import Figure
-from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QSizePolicy, QTabWidget, QVBoxLayout, QWidget
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -195,8 +193,8 @@ class PlotsWidget(QTabWidget):
         self._Q_discharge: list[float] = []
         self._Q_loss: list[float] = []
         self._soc: list[float] = []
-        self._prev_profile_T: Optional[np.ndarray] = None
-        self._prev_profile_z: Optional[np.ndarray] = None
+        self._prev_profile_T: np.ndarray | None = None
+        self._prev_profile_z: np.ndarray | None = None
         self._refresh_all()
 
     def update_profile(self, z_nodes: np.ndarray, temperatures: np.ndarray):

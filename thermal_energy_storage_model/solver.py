@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import warnings
-from typing import Optional, Union
+from collections.abc import Callable
+from typing import cast
 
 import numpy as np
 
@@ -12,9 +13,9 @@ from .diffusors import DiffusorModel, PointDiffusor
 from .fluids import ConstantFluidProperties, FluidProperties
 from .geometry import CylinderGeometry, GeometryModel
 from .losses import ConstantAmbientLoss, LossModel
+from .ports import HeatExchangerPort
 from .presets import StoragePresets
 from .state import StorageInputs, StorageOutputs, StorageState
-from .ports import HeatExchangerPort, Port
 
 # ---------------------------------------------------------------------------
 # Core model
@@ -129,7 +130,7 @@ class ThermalStorage1D:
         self._precompute_geometry()
 
     @classmethod
-    def from_preset(cls, preset: str, **params) -> "ThermalStorage1D":
+    def from_preset(cls, preset: str, **params) -> ThermalStorage1D:
         """
         Create a storage instance from a predefined type.
 
@@ -187,7 +188,11 @@ class ThermalStorage1D:
             ...     burial_depth=0.5,
             ... )
         """
-        preset_map = {
+        # Each preset factory takes a different, preset-specific set of
+        # required keyword arguments (volume/height vs. r_bottom/r_top/height),
+        # so a precise common Callable signature isn't expressible here; the
+        # actual argument check happens dynamically via **params below.
+        preset_map: dict[str, Callable[..., StorageConfig]] = {
             "steel_tank_aboveground": StoragePresets.steel_tank_aboveground,
             "steel_tank_buried":      StoragePresets.steel_tank_buried,
             "ptes":                   StoragePresets.ptes,
@@ -231,21 +236,18 @@ class ThermalStorage1D:
             raise ValueError(
                 f"U_loss must be >= 0, but is {cfg.U_loss}."
             )
-        if cfg.geometry is not None:
-            if not isinstance(cfg.geometry, GeometryModel):
-                raise ValueError(
-                    "geometry must be an instance of GeometryModel."
-                )
-        if cfg.loss_model is not None:
-            if not isinstance(cfg.loss_model, LossModel):
-                raise ValueError(
-                    "loss_model must be an instance of LossModel."
-                )
-        if cfg.fluid is not None:
-            if not isinstance(cfg.fluid, FluidProperties):
-                raise ValueError(
-                    "fluid must be an instance of FluidProperties."
-                )
+        if cfg.geometry is not None and not isinstance(cfg.geometry, GeometryModel):
+            raise ValueError(
+                "geometry must be an instance of GeometryModel."
+            )
+        if cfg.loss_model is not None and not isinstance(cfg.loss_model, LossModel):
+            raise ValueError(
+                "loss_model must be an instance of LossModel."
+            )
+        if cfg.fluid is not None and not isinstance(cfg.fluid, FluidProperties):
+            raise ValueError(
+                "fluid must be an instance of FluidProperties."
+            )
         if cfg.advection_scheme not in ("upwind", "tvd"):
             raise ValueError(
                 f"advection_scheme must be 'upwind' or 'tvd', "
@@ -256,11 +258,10 @@ class ThermalStorage1D:
                 f"solver must be 'explicit' or 'implicit', "
                 f"but is '{cfg.solver}'."
             )
-        if cfg.diffusor_model is not None:
-            if not isinstance(cfg.diffusor_model, DiffusorModel):
-                raise ValueError(
-                    "diffusor_model must be an instance of DiffusorModel."
-                )
+        if cfg.diffusor_model is not None and not isinstance(cfg.diffusor_model, DiffusorModel):
+            raise ValueError(
+                "diffusor_model must be an instance of DiffusorModel."
+            )
 
     def _precompute_geometry(self) -> None:
         """
@@ -358,7 +359,7 @@ class ThermalStorage1D:
 
     def initialize(
         self,
-        T_init: Union[float, np.ndarray],
+        T_init: float | np.ndarray,
         time: float = 0.0,
     ) -> StorageState:
         """
@@ -398,7 +399,10 @@ class ThermalStorage1D:
             >>> state = storage.initialize(T_init=T_profile)
         """
         if np.isscalar(T_init):
-            temps = np.full(self.n, float(T_init))
+            # np.isscalar() isn't a type guard mypy understands, so T_init's
+            # static type is still float | np.ndarray here; it is a scalar
+            # at runtime by construction of this branch.
+            temps = np.full(self.n, float(cast(float, T_init)))
         else:
             temps = np.asarray(T_init, dtype=float).copy()
             if temps.shape != (self.n,):
@@ -587,8 +591,8 @@ class ThermalStorage1D:
 
         dt_sub = dt / n_sub
         cur = state
-        pt_sum: Optional[np.ndarray] = None
-        hx_sum: Optional[np.ndarray] = None
+        pt_sum: np.ndarray | None = None
+        hx_sum: np.ndarray | None = None
         q_loss_sum = 0.0
         for _ in range(n_sub):
             out = self._step_single(cur, dt_sub, inputs)
@@ -749,6 +753,24 @@ class ThermalStorage1D:
         # Representative cp for advection term (profile mean)
         cp_mean = float(np.mean(cp_T))
 
+        # --- Mass-balance sanity check ---
+        # A fixed-volume tank requires sum(port.m_dot) == 0 (incompressibility);
+        # see StorageInputs docstring. A persistent imbalance is not physically
+        # meaningful for this model and causes a silent volume/temperature drift,
+        # so warn rather than silently accepting it.
+        if inputs.ports:
+            m_dot_sum = sum(p.m_dot for p in inputs.ports)
+            m_dot_max = max(abs(p.m_dot) for p in inputs.ports)
+            if m_dot_max > 0.0 and abs(m_dot_sum) / m_dot_max > 1e-6:
+                warnings.warn(
+                    f"Port mass flows are not balanced (Σṁ = {m_dot_sum:.4g} kg/s, "
+                    f"max |ṁ| = {m_dot_max:.4g} kg/s). For a fixed-volume tank "
+                    "this should be ≈0; an unbalanced flow causes a physically "
+                    "inconsistent volume drift and temperature bias over time.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+
         # --- CFL check: maximum absolute interface flow ---
         rho_min = float(rho_T.min())
         m_for_cfl = float(np.max(np.abs(F)))
@@ -854,8 +876,8 @@ class ThermalStorage1D:
         C_nodes: np.ndarray,
         K_cond_iface: np.ndarray,
         cp: float,
-        Q_hx_nodes: Optional[np.ndarray] = None,
-        Q_tvd_explicit: Optional[np.ndarray] = None,
+        Q_hx_nodes: np.ndarray | None = None,
+        Q_tvd_explicit: np.ndarray | None = None,
     ) -> np.ndarray:
         """
         Fully implicit Euler step with upwind advection (TDMA), optional
@@ -1104,22 +1126,6 @@ class ThermalStorage1D:
     # Port helper methods
     # ------------------------------------------------------------------
 
-    def _port_to_node(self, port: "Port") -> int:
-        """
-        Return nearest node index for a given port height.
-
-        Parameters
-        ----------
-        port : Port
-            Port with height coordinate z [m] above tank bottom.
-
-        Returns
-        -------
-        int
-            Index of nearest node (0 = top, N-1 = bottom).
-        """
-        return int(np.argmin(np.abs(self._z_nodes - port.z)))
-
     def _compute_inter_node_fluxes(self, ports: list) -> np.ndarray:
         """
         Compute inter-node mass-flow vector F [kg/s].
@@ -1196,7 +1202,7 @@ class ThermalStorage1D:
         S: np.ndarray,
         T_src: np.ndarray,
         cp: float,
-        dt: Optional[float] = None,
+        dt: float | None = None,
     ) -> np.ndarray:
         """
         Compute advective heat flow with variable port flow field.
@@ -1341,7 +1347,7 @@ class ThermalStorage1D:
     def _compute_conduction(
         self,
         T: np.ndarray,
-        K_cond_iface: Optional[np.ndarray] = None,
+        K_cond_iface: np.ndarray | None = None,
     ) -> np.ndarray:
         """
         Compute conductive heat flow between neighboring nodes [W].
@@ -1409,7 +1415,7 @@ class ThermalStorage1D:
         """
         return self._loss_model.Q_loss_nodes(T, self.A_wall, self._z_nodes)
 
-    def _get_hx_weights(self, hx: "HeatExchangerPort") -> list:
+    def _get_hx_weights(self, hx: HeatExchangerPort) -> list:
         """
         Return equal-weight ``(node_index, weight)`` pairs for an HX zone.
 
@@ -1497,7 +1503,9 @@ class ThermalStorage1D:
                 # --- Segmented model ---
                 # Sort nodes in external-fluid flow direction.
                 # _z_nodes[0] = top (z=H), _z_nodes[N-1] = bottom (z=0).
-                reverse = (hx.flow_direction == "upward")
+                # "downward": enters at top (high z) -> descending z -> reverse=True.
+                # "upward":   enters at bottom (low z) -> ascending z -> reverse=False.
+                reverse = (hx.flow_direction == "downward")
                 ordered_nodes = sorted(
                     [k for k, _ in weights],
                     key=lambda k: self._z_nodes[k],

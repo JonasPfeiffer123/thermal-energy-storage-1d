@@ -40,7 +40,7 @@ def test_dronninglund_total_mae_regression(tmp_path):
         # reference plots in benchmark/results/ with new timestamps/IDs.
         TES_VALIDATION_OUT_DIR=str(tmp_path),
     )
-    proc = subprocess.run(
+    proc = subprocess.run(  # noqa: PLW1510 -- returncode checked explicitly below for a clearer failure message
         [sys.executable, str(SCRIPT)],
         cwd=str(ROOT), env=env, capture_output=True,
         encoding="utf-8", errors="replace", timeout=600,

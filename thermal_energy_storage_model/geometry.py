@@ -130,7 +130,7 @@ class CylinderGeometry(GeometryModel):
         self._volume: float = self._A_cross_val * height
 
     @classmethod
-    def from_volume(cls, volume: float, height: float) -> "CylinderGeometry":
+    def from_volume(cls, volume: float, height: float) -> CylinderGeometry:
         """
         Create a cylinder from volume and height.
 
@@ -399,7 +399,7 @@ class TruncatedPyramidGeometry(GeometryModel):
         b_bottom: float,
         height: float,
         slope: float = 2.0,
-    ) -> "TruncatedPyramidGeometry":
+    ) -> TruncatedPyramidGeometry:
         """
         Create a rectangular PTES from bottom area, height and slope.
 

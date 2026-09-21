@@ -421,12 +421,13 @@ class TransientGroundLoss(LossModel):
         # Initialized on first advance() or Q_loss_nodes() call.
         self._T_ground: np.ndarray | None = None
 
-    def _ensure_init(self, n_nodes: int) -> None:
-        """Initialize T_ground with T_init if not initialized yet."""
-        if self._T_ground is None or self._T_ground.shape[0] != n_nodes:
-            self._T_ground = np.full(
-                (n_nodes, self.n_layers), self._T_init, dtype=float
-            )
+    def _ensure_init(self, n_nodes: int) -> np.ndarray:
+        """Initialize T_ground with T_init if not initialized yet, return it."""
+        Tg = self._T_ground
+        if Tg is None or Tg.shape[0] != n_nodes:
+            Tg = np.full((n_nodes, self.n_layers), self._T_init, dtype=float)
+            self._T_ground = Tg
+        return Tg
 
     def Q_loss_nodes(
         self,
@@ -444,7 +445,7 @@ class TransientGroundLoss(LossModel):
         """
         del _z_node_centers
         n = len(T_nodes)
-        self._ensure_init(n)
+        Tg = self._ensure_init(n)
 
         Q = np.empty(n)
         # Lid: steady-state
@@ -452,7 +453,7 @@ class TransientGroundLoss(LossModel):
         # Wall + bottom: transient (heat flow from first ground layer)
         Q[1:] = (
             A_wall_nodes[1:]
-            * (self._T_ground[1:, 0] - T_nodes[1:])
+            * (Tg[1:, 0] - T_nodes[1:])
             / self._R
         )
         return Q
@@ -471,9 +472,7 @@ class TransientGroundLoss(LossModel):
         """
         del A_wall_nodes, _z_node_centers
         n = len(T_nodes)
-        self._ensure_init(n)
-
-        Tg = self._T_ground   # (n_nodes, n_layers), alias for readability
+        Tg = self._ensure_init(n)   # (n_nodes, n_layers)
         R = self._R
         C = self._C
         dT = np.empty_like(Tg)
@@ -489,7 +488,7 @@ class TransientGroundLoss(LossModel):
         # Do not update lid node (steady-state loss model)
         dT[0, :] = 0.0
 
-        self._T_ground += dT
+        Tg += dT
 
     @property
     def T_ground(self) -> np.ndarray | None:

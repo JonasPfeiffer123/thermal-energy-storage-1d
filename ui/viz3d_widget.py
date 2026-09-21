@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import ClassVar
 
-import matplotlib.cm as mcm
+import matplotlib as mpl
 import numpy as np
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavToolbar
@@ -28,6 +28,7 @@ from thermal_energy_storage_model import (
     StorageConfig,
     TruncatedConeGeometry,
 )
+
 try:
     from thermal_energy_storage_model import TruncatedPyramidGeometry as _TruncPyramid
 except ImportError:
@@ -45,7 +46,8 @@ class Tank3DWidget(QWidget):
     - The colorbar norm is updated in-place (no repeated fig.colorbar() calls).
     """
 
-    _PORT_COLORS = {
+    # Read-only lookup table: never mutated, only queried via .get().
+    _PORT_COLORS: ClassVar[dict[str, str]] = {
         "charge_in":     "#e74c3c",
         "charge_out":    "#e67e22",
         "discharge_in":  "#3498db",
@@ -54,10 +56,13 @@ class Tank3DWidget(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._config: Optional[StorageConfig] = None
-        self._sm: Optional[ScalarMappable] = None   # for colorbar
-        self._norm: Optional[Normalize] = None
-        self._cmap_fn = mcm.get_cmap("RdYlBu_r")
+        self._config: StorageConfig | None = None
+        self._sm: ScalarMappable | None = None   # for colorbar
+        self._norm: Normalize | None = None
+        # matplotlib.cm.get_cmap() was removed in matplotlib >= 3.11;
+        # matplotlib.colormaps[...] is the supported replacement (available
+        # since 3.5, well within this project's matplotlib>=3.7.0 floor).
+        self._cmap_fn = mpl.colormaps["RdYlBu_r"]
         self._colorbar = None
         self._placeholder_active = True
         self._setup_ui()
@@ -93,10 +98,10 @@ class Tank3DWidget(QWidget):
     def update_tank(
         self,
         config: StorageConfig,
-        temperatures: Optional[np.ndarray] = None,
+        temperatures: np.ndarray | None = None,
         T_min: float = 10.0,
         T_max: float = 95.0,
-        ports: Optional[list[dict]] = None,
+        ports: list[dict] | None = None,
     ):
         """
         Update the 3D visualisation.

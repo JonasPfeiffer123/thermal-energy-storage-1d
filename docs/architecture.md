@@ -17,17 +17,35 @@ This document describes the structure of the model at the code level.
 ## 1. Module Overview
 
 ```
-thermal_energy_storage_model.py          Complete model (single file)
-examples/example_simulation.py Three example scenarios
+thermal_energy_storage_model/            Modular Python package (core model)
+    __init__.py                          Public API re-exports
+    config.py                            StorageConfig
+    state.py                             StorageState, StorageInputs, StorageOutputs
+    geometry.py                          CylinderGeometry, TruncatedConeGeometry, …
+    fluids.py                            WaterProperties, ConstantFluidProperties
+    losses.py                            ConstantAmbientLoss, GroundTemperatureLoss, …
+    ports.py                             Port, HeatExchangerPort
+    diffusors.py                         PointDiffusor, UniformDiffusor
+    solver.py                            ThermalStorage1D (explicit/implicit Euler, TDMA)
+    model.py                             Facade re-export of ThermalStorage1D
+    presets.py                           StoragePresets factory
+examples/example_simulation.py           Three example scenarios
 benchmark/
-    benchmark_model_variants.py Model variant comparison (optional FreeTTES reference)
-    benchmark_scenarios.py      Multi-scenario benchmark (optional FreeTTES reference)
-    compare_runs.py             Compare named benchmark runs
-    results/                    Outputs (PNG, CSV, JSON)
-    results/runs/{name}/        Named persistent runs
+    config_benchmark.py                  Shared tank parameters
+    shared_utils.py                      Physical helpers, 0D reference model
+    benchmark_model_variants.py          0D-1D accuracy vs. speed comparison (optional FreeTTES reference)
+    dronninglund_validation.py           Validation vs. Dronninglund PTES 2014
+    hoje_taastrup_validation.py          Validation vs. Høje Taastrup PTES 2024
+    compare_runs.py                      Compare named benchmark runs
+    results/                             Pre-computed plots and CSVs
 ```
 
-`thermal_energy_storage_model.py` contains all classes — intentionally kept as a single file so that integration into other simulation environments is possible by simply copying the file.
+The core model lives in the `thermal_energy_storage_model/` package, split by
+concern (geometry, fluid, loss, port, diffusor, solver) rather than kept as a
+single file. Each abstract interface (`GeometryModel`, `FluidProperties`,
+`LossModel`, `DiffusorModel`) has its own module so custom implementations can
+be added — or the relevant module copied into another project — without
+pulling in the whole package.
 
 ---
 

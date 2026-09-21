@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from thermal_energy_storage_model import StorageConfig, ThermalStorage1D
 from tests._helpers import const_fluid
+from thermal_energy_storage_model import StorageConfig, ThermalStorage1D
 
 
 @pytest.fixture

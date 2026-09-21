@@ -7,11 +7,10 @@ Emits ``config_changed`` on every parameter change.
 
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -23,7 +22,6 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
-    QSizePolicy,
     QSpinBox,
     QStackedWidget,
     QTabWidget,
@@ -426,6 +424,16 @@ class ConfigPanel(QWidget):
             "Implicit: stable for arbitrarily large timesteps."
         )
         ft.addRow("Solver:", self.num_solver)
+        self.num_auto_substep = QCheckBox("Auto sub-stepping (explicit solver)")
+        self.num_auto_substep.setChecked(True)
+        self.num_auto_substep.setToolTip(
+            "If dt would violate the CFL condition, split it into the\n"
+            "smallest number of CFL-safe sub-steps automatically.\n"
+            "Disable to reproduce the raw single-step behaviour\n"
+            "(only a RuntimeWarning is raised on violation).\n"
+            "Ignored by the implicit solver."
+        )
+        ft.addRow(self.num_auto_substep)
         lay.addWidget(grp_time)
 
         # Advection scheme
@@ -478,6 +486,48 @@ class ConfigPanel(QWidget):
         )
         lay.addWidget(grp_diff)
 
+        # Headspace (atmospheric outdoor storages)
+        grp_hs = QGroupBox("Headspace (atmospheric storage)")
+        fhs = QFormLayout(grp_hs)
+        self.hs_enable = QCheckBox("Enable headspace model")
+        self.hs_enable.setToolTip(
+            "Hot gas/vapour space above the water surface, with its own\n"
+            "thermal mass; loses heat through the roof and exchanges\n"
+            "heat with the top water node. For pressureless outdoor tanks."
+        )
+        fhs.addRow(self.hs_enable)
+        self.hs_t_init = _make_dspin(99.0, 0.0, 150.0, 1.0, 1, "°C",
+                                     "Initial headspace temperature")
+        self.hs_height = _make_dspin(0.5, 0.05, 10.0, 0.05, 2, "m",
+                                     "Headspace height (gas volume above water)")
+        self.hs_u_roof = _make_dspin(0.2, 0.0, 10.0, 0.05, 3, "W/(m²·K)",
+                                     "Roof heat transfer coefficient (to ambient)")
+        self.hs_h_water = _make_dspin(5.0, 0.1, 50.0, 0.5, 1, "W/(m²·K)",
+                                      "Convective HTC headspace ↔ top water node")
+        self.hs_rho = _make_dspin(2400.0, 0.5, 10000.0, 50.0, 1, "kg/m³",
+                                  "Effective density of headspace thermal mass\n"
+                                  "(default: concrete roof; air ≈ 1.2, steam ≈ 0.9)")
+        self.hs_cp = _make_dspin(880.0, 100.0, 5000.0, 10.0, 0, "J/(kg·K)",
+                                 "Effective specific heat capacity of headspace mass\n"
+                                 "(default: concrete roof; air ≈ 1005, steam ≈ 2000)")
+        fhs.addRow("T_init:", self.hs_t_init)
+        fhs.addRow("Height:", self.hs_height)
+        fhs.addRow("U_roof:", self.hs_u_roof)
+        fhs.addRow("h_water:", self.hs_h_water)
+        fhs.addRow("ρ (mass):", self.hs_rho)
+        fhs.addRow("cp (mass):", self.hs_cp)
+        for wdg in (self.hs_t_init, self.hs_height, self.hs_u_roof,
+                    self.hs_h_water, self.hs_rho, self.hs_cp):
+            wdg.setEnabled(False)
+        self.hs_enable.stateChanged.connect(
+            lambda state: [
+                wdg.setEnabled(bool(state))
+                for wdg in (self.hs_t_init, self.hs_height, self.hs_u_roof,
+                            self.hs_h_water, self.hs_rho, self.hs_cp)
+            ]
+        )
+        lay.addWidget(grp_hs)
+
         lay.addStretch()
         return w
 
@@ -496,6 +546,8 @@ class ConfigPanel(QWidget):
             self.loss_u_ground, self.loss_t_surface, self.loss_t_deep,
             self.loss_depth_decay, self.loss_burial_depth,
             self.diff_h_zone,
+            self.hs_t_init, self.hs_height, self.hs_u_roof,
+            self.hs_h_water, self.hs_rho, self.hs_cp,
         ]
         for w in widgets_dspin:
             w.valueChanged.connect(self._on_change)
@@ -509,6 +561,8 @@ class ConfigPanel(QWidget):
 
         self.num_nodes.valueChanged.connect(self._on_change)
         self.num_buoyancy.stateChanged.connect(self._on_change)
+        self.num_auto_substep.stateChanged.connect(self._on_change)
+        self.hs_enable.stateChanged.connect(self._on_change)
 
         if _HAS_PYRAMID:
             self.pyr_height.valueChanged.connect(self._on_change)
@@ -681,7 +735,15 @@ class ConfigPanel(QWidget):
             advection_scheme=scheme,
             solver=solver,
             buoyancy=self.num_buoyancy.isChecked(),
+            auto_substep=self.num_auto_substep.isChecked(),
             lambda_eff_factor=self.fluid_lambda_factor.value(),
+            headspace=self.hs_enable.isChecked(),
+            T_headspace_init=self.hs_t_init.value(),
+            H_headspace=self.hs_height.value(),
+            U_roof=self.hs_u_roof.value(),
+            h_headspace_water=self.hs_h_water.value(),
+            rho_headspace=self.hs_rho.value(),
+            cp_headspace=self.hs_cp.value(),
         )
 
     def set_from_config(self, config: StorageConfig):
@@ -717,9 +779,12 @@ class ConfigPanel(QWidget):
             else:
                 self.fluid_type.setCurrentIndex(0)
                 if isinstance(config.fluid, ConstantFluidProperties):
-                    self.fluid_rho.setValue(config.fluid.rho)
-                    self.fluid_cp.setValue(config.fluid.cp)
-                    self.fluid_lambda.setValue(config.fluid.lambda_fluid)
+                    # rho/cp/lambda_fluid are methods (T -> value), not
+                    # attributes; call them rather than passing the bound
+                    # method object itself to setValue().
+                    self.fluid_rho.setValue(config.fluid.rho(0.0))
+                    self.fluid_cp.setValue(config.fluid.cp(0.0))
+                    self.fluid_lambda.setValue(config.fluid.lambda_fluid(0.0))
 
             self.fluid_lambda_factor.setValue(config.lambda_eff_factor)
 
@@ -759,6 +824,25 @@ class ConfigPanel(QWidget):
             solver_idx = 0 if config.solver == "explicit" else 1
             self.num_solver.setCurrentIndex(solver_idx)
             self.num_buoyancy.setChecked(config.buoyancy)
+            self.num_auto_substep.setChecked(config.auto_substep)
+
+            # Diffusor (build_config() has always supported this; restoring
+            # it here was previously missing, so a round-trip silently lost
+            # a non-default diffusor_model selection)
+            if isinstance(config.diffusor_model, UniformDiffusor):
+                self.diff_type.setCurrentIndex(1)
+                self.diff_h_zone.setValue(config.diffusor_model.H_zone)
+            else:
+                self.diff_type.setCurrentIndex(0)
+
+            # Headspace
+            self.hs_enable.setChecked(config.headspace)
+            self.hs_t_init.setValue(config.T_headspace_init)
+            self.hs_height.setValue(config.H_headspace)
+            self.hs_u_roof.setValue(config.U_roof)
+            self.hs_h_water.setValue(config.h_headspace_water)
+            self.hs_rho.setValue(config.rho_headspace)
+            self.hs_cp.setValue(config.cp_headspace)
 
         finally:
             self._updating = False
@@ -775,8 +859,16 @@ class ConfigPanel(QWidget):
         elif isinstance(geom, TruncatedConeGeometry):
             geom_d = {"type": "cone", "r_bottom": geom.r_bottom,
                       "r_top": geom.r_top, "height": geom.height}
+        elif _HAS_PYRAMID and isinstance(geom, TruncatedPyramidGeometry):
+            geom_d = {"type": "pyramid", "a_bottom": geom.a_bottom,
+                      "b_bottom": geom.b_bottom, "a_top": geom.a_top,
+                      "b_top": geom.b_top, "height": geom.height}
         else:
-            geom_d = {"type": "unknown"}
+            # No geometry object set (e.g. a StorageConfig built directly
+            # via the Python API with only volume/height): fall back to
+            # those scalar fields, always present, so a round-trip degrades
+            # to an equivalent cylinder instead of losing the data.
+            geom_d = {"type": "cylinder", "volume": config.volume, "height": config.height}
 
         loss = config.loss_model
         if isinstance(loss, ConstantAmbientLoss):
@@ -800,18 +892,36 @@ class ConfigPanel(QWidget):
         if isinstance(fluid, WaterProperties):
             fluid_d = {"type": "water_properties"}
         elif isinstance(fluid, ConstantFluidProperties):
-            fluid_d = {"type": "constant", "rho": fluid.rho, "cp": fluid.cp,
-                       "lambda_fluid": fluid.lambda_fluid}
+            # rho/cp/lambda_fluid are FluidProperties *methods* (T -> value),
+            # not attributes; call them (any T -- constant regardless) rather
+            # than serialising the bound-method objects themselves.
+            fluid_d = {"type": "constant", "rho": fluid.rho(0.0), "cp": fluid.cp(0.0),
+                       "lambda_fluid": fluid.lambda_fluid(0.0)}
         else:
             fluid_d = {}
+
+        diffusor = config.diffusor_model
+        if isinstance(diffusor, UniformDiffusor):
+            diffusor_d = {"type": "uniform", "H_zone": diffusor.H_zone}
+        else:
+            diffusor_d = {"type": "point"}
 
         return {
             "geometry": geom_d,
             "loss_model": loss_d,
             "fluid": fluid_d,
+            "diffusor_model": diffusor_d,
             "n_nodes": config.n_nodes,
             "advection_scheme": config.advection_scheme,
             "solver": config.solver,
             "buoyancy": config.buoyancy,
+            "auto_substep": config.auto_substep,
             "lambda_eff_factor": config.lambda_eff_factor,
+            "headspace": config.headspace,
+            "T_headspace_init": config.T_headspace_init,
+            "H_headspace": config.H_headspace,
+            "U_roof": config.U_roof,
+            "h_headspace_water": config.h_headspace_water,
+            "rho_headspace": config.rho_headspace,
+            "cp_headspace": config.cp_headspace,
         }

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 import numpy as np
 
@@ -53,7 +52,7 @@ class StorageState:
     time: float = 0.0
     """Current simulation time [s]."""
 
-    T_headspace: Optional[float] = None
+    T_headspace: float | None = None
     """
     Current headspace temperature [°C].
 
@@ -163,11 +162,11 @@ class StorageInputs:
         m_dot_discharge: float = 0.0,
         T_discharge_in: float = 0.0,
         height: float = 0.0,
-        z_charge_in: Optional[float] = None,
-        z_charge_out: Optional[float] = None,
-        z_discharge_in: Optional[float] = None,
-        z_discharge_out: Optional[float] = None,
-    ) -> "StorageInputs":
+        z_charge_in: float | None = None,
+        z_charge_out: float | None = None,
+        z_discharge_in: float | None = None,
+        z_discharge_out: float | None = None,
+    ) -> StorageInputs:
         """
         Convenience constructor for classic two-loop operation.
 
@@ -282,6 +281,6 @@ class StorageOutputs:
     """Outlet temperatures of external fluids for each HX port [°C].
     Order matches ``StorageInputs.hx_ports``."""
 
-    T_headspace: Optional[float] = None
+    T_headspace: float | None = None
     """Headspace temperature at the end of the timestep [°C].
     ``None`` when the headspace model is not active."""

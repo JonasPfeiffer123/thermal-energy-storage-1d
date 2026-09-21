@@ -16,7 +16,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 try:
-    from PyQt6.QtCore import Qt
     from PyQt6.QtWidgets import QApplication
 except ImportError:
     print(

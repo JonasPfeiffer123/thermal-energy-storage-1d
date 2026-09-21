@@ -14,11 +14,11 @@ import csv
 import json
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import ClassVar
 
 import numpy as np
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QAction, QIcon, QKeySequence
+from PyQt6.QtGui import QAction, QKeySequence
 from PyQt6.QtWidgets import (
     QDockWidget,
     QFileDialog,
@@ -26,15 +26,12 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QSplitter,
-    QStatusBar,
     QToolBar,
-    QWidget,
 )
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from thermal_energy_storage_model import StorageConfig, ThermalStorage1D
-
 from ui.config_panel import ConfigPanel
 from ui.plots_widget import PlotsWidget
 from ui.sim_control import SimControlWidget
@@ -49,8 +46,9 @@ class MainWindow(QMainWindow):
     Connects all UI components and manages the simulation workflow.
     """
 
-    # Port definitions for 3D visualisation (default: two-circuit)
-    _DEFAULT_PORTS = [
+    # Port definitions for 3D visualisation (default: two-circuit). Read-only:
+    # never mutated, only iterated -- annotated ClassVar so it stays that way.
+    _DEFAULT_PORTS: ClassVar[list[dict[str, str | float]]] = [
         {"type": "charge_in",    "label": "Charging in",   "z_frac": 1.0},
         {"type": "charge_out",   "label": "Charging out",  "z_frac": 0.0},
         {"type": "discharge_in", "label": "Discharging in","z_frac": 0.0},
@@ -59,9 +57,9 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self._storage: Optional[ThermalStorage1D] = None
-        self._worker: Optional[SimulationWorker] = None
-        self._current_config: Optional[StorageConfig] = None
+        self._storage: ThermalStorage1D | None = None
+        self._worker: SimulationWorker | None = None
+        self._current_config: StorageConfig | None = None
 
         # History data for export
         self._history_times: list[float] = []
@@ -69,7 +67,7 @@ class MainWindow(QMainWindow):
         self._history_outputs: list = []
 
         # Buffered 3D data for timer-based rendering
-        self._pending_3d: Optional[dict] = None   # {config, T, T_lo, T_hi, ports}
+        self._pending_3d: dict | None = None   # {config, T, T_lo, T_hi, ports}
         self._viz3d_timer = QTimer(self)
         self._viz3d_timer.setInterval(300)        # max. ~3 Hz frame rate
         self._viz3d_timer.timeout.connect(self._flush_3d_update)
@@ -437,9 +435,10 @@ class MainWindow(QMainWindow):
 
         # Start worker
         update_n = self._sim_ctrl.get_update_every_n()
+        hx_port = self._sim_ctrl.get_hx_port()
         self._worker = SimulationWorker(
             self._storage, initial_state, phases, dt,
-            update_every_n=update_n,
+            update_every_n=update_n, hx_port=hx_port,
         )
         self._worker.step_complete.connect(self._on_step)
         self._worker.phase_started.connect(self._on_phase_started)
@@ -507,7 +506,6 @@ class MainWindow(QMainWindow):
         # Determine current phase
         for ph in phases:
             if ph.mode in ("charge", "both"):
-                from thermal_energy_storage_model import WaterProperties
                 cp = 4187.0
                 T_c_out = T[-1]
                 Q_charge = ph.m_dot_charge * cp * abs(ph.T_charge_in - T_c_out)
@@ -762,16 +760,34 @@ class MainWindow(QMainWindow):
         )
 
     def _dict_to_config(self, d: dict) -> StorageConfig:
-        """Reconstruct a StorageConfig from a dict (simple)."""
+        """Reconstruct a StorageConfig from a dict (counterpart of
+        ConfigPanel.config_to_dict(); keep both in sync)."""
         from thermal_energy_storage_model import (
-            ConstantAmbientLoss, ConstantFluidProperties,
-            CylinderGeometry, GroundTemperatureLoss,
-            SplitAmbientLoss, TruncatedConeGeometry, WaterProperties,
+            ConstantAmbientLoss,
+            ConstantFluidProperties,
+            CylinderGeometry,
+            GroundTemperatureLoss,
+            PointDiffusor,
+            SplitAmbientLoss,
+            TransientGroundLoss,
+            TruncatedConeGeometry,
+            UniformDiffusor,
+            WaterProperties,
         )
+        try:
+            from thermal_energy_storage_model import TruncatedPyramidGeometry
+        except ImportError:
+            TruncatedPyramidGeometry = None
+
         gd = d.get("geometry", {})
         if gd.get("type") == "cone":
             geom = TruncatedConeGeometry(
                 r_bottom=gd["r_bottom"], r_top=gd["r_top"], height=gd["height"]
+            )
+        elif gd.get("type") == "pyramid" and TruncatedPyramidGeometry is not None:
+            geom = TruncatedPyramidGeometry(
+                a_bottom=gd["a_bottom"], b_bottom=gd["b_bottom"],
+                a_top=gd["a_top"], b_top=gd["b_top"], height=gd["height"],
             )
         else:
             geom = CylinderGeometry.from_volume(gd["volume"], gd["height"])
@@ -779,7 +795,7 @@ class MainWindow(QMainWindow):
         ld = d.get("loss_model", {})
         if ld.get("type") == "split":
             loss = SplitAmbientLoss(
-                U_lid=ld["U_lid"], U_wall_body=ld["U_wall_body"],
+                U_lid=ld["U_lid"], U_wall=ld["U_wall"],
                 T_ambient=ld["T_ambient"]
             )
         elif ld.get("type") == "ground":
@@ -787,6 +803,13 @@ class MainWindow(QMainWindow):
                 U_loss=ld["U_loss"], T_surface=ld["T_surface"],
                 T_deep=ld["T_deep"], depth_decay=ld["depth_decay"],
                 burial_depth=ld["burial_depth"]
+            )
+        elif ld.get("type") == "transient_ground":
+            loss = TransientGroundLoss(
+                U_lid=ld["U_lid"], T_ambient_lid=ld["T_ambient_lid"],
+                lambda_soil=ld["lambda_soil"], rho_soil=ld["rho_soil"],
+                cp_soil=ld["cp_soil"], d_total=ld["d_total"],
+                n_layers=ld["n_layers"], T_far=ld["T_far"],
             )
         else:
             loss = ConstantAmbientLoss(
@@ -804,6 +827,12 @@ class MainWindow(QMainWindow):
                 lambda_fluid=fd.get("lambda_fluid", 0.663),
             )
 
+        dd = d.get("diffusor_model", {})
+        if dd.get("type") == "uniform":
+            diffusor = UniformDiffusor(H_zone=dd["H_zone"])
+        else:
+            diffusor = PointDiffusor()
+
         return StorageConfig(
             volume=geom.volume,
             height=geom.height,
@@ -811,10 +840,19 @@ class MainWindow(QMainWindow):
             geometry=geom,
             loss_model=loss,
             fluid=fluid,
+            diffusor_model=diffusor,
             advection_scheme=d.get("advection_scheme", "tvd"),
             solver=d.get("solver", "explicit"),
             buoyancy=d.get("buoyancy", True),
+            auto_substep=d.get("auto_substep", True),
             lambda_eff_factor=d.get("lambda_eff_factor", 5.0),
+            headspace=d.get("headspace", False),
+            T_headspace_init=d.get("T_headspace_init", 99.0),
+            H_headspace=d.get("H_headspace", 0.5),
+            U_roof=d.get("U_roof", 0.2),
+            h_headspace_water=d.get("h_headspace_water", 5.0),
+            rho_headspace=d.get("rho_headspace", 2400.0),
+            cp_headspace=d.get("cp_headspace", 880.0),
         )
 
     def closeEvent(self, event):

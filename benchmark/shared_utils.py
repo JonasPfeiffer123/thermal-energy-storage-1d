@@ -8,12 +8,16 @@ profile interpolation, and output helpers.
 from __future__ import annotations
 
 import numpy as np
-
 from config_benchmark import (
-    A_CROSS, H_WS, T_END_CHARGE, T_END_IDLE,
-    R_INNER, V_TANK, U_WALL, T_AMB,
+    A_CROSS,
+    H_WS,
+    R_INNER,
+    T_AMB,
+    T_END_CHARGE,
+    T_END_IDLE,
+    U_WALL,
+    V_TANK,
 )
-
 
 # ── Physical helper functions ─────────────────────────────────────────────────
 

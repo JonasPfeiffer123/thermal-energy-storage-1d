@@ -22,6 +22,10 @@ ui = [
 test = [
     "pytest>=7.0",
 ]
+lint = [
+    "ruff>=0.16",
+    "mypy>=1.10",
+]
 
 [tool.setuptools.dynamic]
 version = { attr = "thermal_energy_storage_model.__version__" }
@@ -35,3 +39,38 @@ include = ["thermal_energy_storage_model*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 filterwarnings = ["error::RuntimeWarning"]
+
+[tool.ruff]
+target-version = "py310"
+
+[tool.ruff.lint]
+# Ruff's own defaults (E4/E7/E9 pycodestyle subset, F pyflakes, UP pyupgrade,
+# I isort, SIM flake8-simplify, RUF ruff-specific, and more) are kept as-is;
+# no project-wide expansion or restriction beyond the per-file exceptions
+# below, which document real, intentional patterns rather than silencing a
+# genuine defect class.
+[tool.ruff.lint.per-file-ignores]
+# PyQt6 UI: catching bare Exception in live-preview/label update handlers is
+# intentional -- these run on every keystroke/partial input and must not
+# crash the application on any parse/validation failure. The two flagged
+# loop-variable closures in sim_control.py are defined *and* called within
+# the same loop iteration (verified, not a late-binding bug).
+"ui/*" = ["BLE001", "S110", "B023"]
+# Benchmark scripts: best-effort operations around optional/external
+# dependencies (FreeTTES reference repo, git metadata, optional measurement
+# columns) must not abort an otherwise-successful validation run.
+"benchmark/*" = ["S110", "BLE001"]
+# Test suite: dict(key=value, ...) is the established, deliberately-chosen
+# style throughout this suite for building StorageConfig/kwargs dicts (see
+# e.g. tests/conftest.py); not rewritten to {"key": value} literals.
+"tests/*" = ["C408"]
+
+[tool.mypy]
+# No explicit python_version pin: newer numpy releases ship .pyi stubs using
+# 3.12-only syntax (PEP 695 `type` statements), which mypy's parser rejects
+# outright under an older forced python_version even though this project's
+# own code targets py310+. Letting mypy default to the running interpreter
+# avoids that stub/interpreter mismatch; the lint CI job pins Python 3.12.
+files = ["thermal_energy_storage_model"]
+warn_unused_ignores = true
+warn_redundant_casts = true

@@ -19,9 +19,9 @@ Usage
 
 from __future__ import annotations
 
-import sys
-import json
 import argparse
+import json
+import sys
 from pathlib import Path
 
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
@@ -221,7 +221,6 @@ def compare_plot(run_names: list[str], out_dir: Path) -> None:
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from matplotlib.lines import Line2D
-    from matplotlib.patches import Patch
 
     # ── Load data ──────────────────────────────────────────────────────────────
     all_data:  list[dict] = []

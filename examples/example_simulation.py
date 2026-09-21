@@ -38,7 +38,7 @@ from thermal_energy_storage_model import (
 # Optional: Matplotlib for visualisation
 try:
     import matplotlib.pyplot as plt
-    import matplotlib.gridspec as gridspec
+    from matplotlib import gridspec
     MATPLOTLIB_AVAILABLE = True
 except ImportError:
     MATPLOTLIB_AVAILABLE = False
