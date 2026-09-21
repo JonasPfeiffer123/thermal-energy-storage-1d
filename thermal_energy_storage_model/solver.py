@@ -749,6 +749,24 @@ class ThermalStorage1D:
         # Representative cp for advection term (profile mean)
         cp_mean = float(np.mean(cp_T))
 
+        # --- Mass-balance sanity check ---
+        # A fixed-volume tank requires sum(port.m_dot) == 0 (incompressibility);
+        # see StorageInputs docstring. A persistent imbalance is not physically
+        # meaningful for this model and causes a silent volume/temperature drift,
+        # so warn rather than silently accepting it.
+        if inputs.ports:
+            m_dot_sum = sum(p.m_dot for p in inputs.ports)
+            m_dot_max = max(abs(p.m_dot) for p in inputs.ports)
+            if m_dot_max > 0.0 and abs(m_dot_sum) / m_dot_max > 1e-6:
+                warnings.warn(
+                    f"Port mass flows are not balanced (Σṁ = {m_dot_sum:.4g} kg/s, "
+                    f"max |ṁ| = {m_dot_max:.4g} kg/s). For a fixed-volume tank "
+                    "this should be ≈0; an unbalanced flow causes a physically "
+                    "inconsistent volume drift and temperature bias over time.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+
         # --- CFL check: maximum absolute interface flow ---
         rho_min = float(rho_T.min())
         m_for_cfl = float(np.max(np.abs(F)))

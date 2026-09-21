@@ -118,11 +118,20 @@ nicht weiter verfolgt, da geringer Grenznutzen.
 
 ## P2 – Validierung / Robustheit
 
-- [ ] **Massenbilanz-Warnung.** `StorageInputs`-Docstring
+- [x] **Massenbilanz-Warnung.** `StorageInputs`-Docstring
       (`thermal_energy_storage_model/state.py:119-121`) verlangt
       `Σ m_dot ≈ 0`, wird aber nirgends geprüft. `RuntimeWarning` analog zum
-      bestehenden CFL-Check in `_step_single` ergänzen, wenn die Bilanz relativ
-      zum größten Portfluss signifikant von 0 abweicht. Plus Test.
+      bestehenden CFL-Check in `_step_single` ergänzt, wenn die Bilanz relativ
+      zum größten Portfluss signifikant von 0 abweicht (Schwelle: 1e-6
+      relativ, toleriert Fließkomma-Rauschen, greift aber bei vergessenen
+      Gegen-Ports). `tests/test_mass_balance.py`.
+      *(Geprüft: `benchmark/dronninglund_validation.py` und
+      `hoje_taastrup_validation.py` berechnen den dritten Port bereits
+      explizit als `-(f_top+f_mid)` „mass balance" – dort greift die neue
+      Warnung nicht ungewollt. Kleine Restimbalancen durch deren
+      Rausch-Filterung (`abs(f) > 0.01`) könnten die Warnung theoretisch
+      triggern, aber nur als Info-Ausgabe, kein Testbruch, da diese Skripte
+      ohne `filterwarnings=error` laufen.)*
 
 ## P3 – UI-Parität
 
