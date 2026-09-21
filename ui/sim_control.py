@@ -17,6 +17,7 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
@@ -33,6 +34,7 @@ from PyQt6.QtWidgets import (
 )
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+from thermal_energy_storage_model import HeatExchangerPort
 from ui.simulation_worker import SimPhase
 
 # Column index constants for the phase table
@@ -142,6 +144,80 @@ class SimControlWidget(QWidget):
         f.addRow("T_max (SOC):", self.spin_soc_tmax)
 
         main_layout.addWidget(grp_init)
+
+        # --- Heat exchanger (optional, constant throughout the run) ---
+        grp_hx = QGroupBox("Heat Exchanger (optional)")
+        grp_hx.setFixedWidth(200)
+        fhx = QFormLayout(grp_hx)
+        fhx.setSpacing(4)
+
+        self.chk_hx_enable = QCheckBox("Enable (epsilon-NTU)")
+        self.chk_hx_enable.setToolTip(
+            "Hydraulically decoupled heat exchanger (e.g. solar collector\n"
+            "loop), active during every phase regardless of its mode."
+        )
+        fhx.addRow(self.chk_hx_enable)
+
+        self.spin_hx_z = QDoubleSpinBox()
+        self.spin_hx_z.setRange(0.0, 500.0)
+        self.spin_hx_z.setValue(9.0)
+        self.spin_hx_z.setSuffix("  m")
+        self.spin_hx_z.setToolTip("Height of the HX zone center above tank bottom")
+        fhx.addRow("z:", self.spin_hx_z)
+
+        self.spin_hx_h = QDoubleSpinBox()
+        self.spin_hx_h.setRange(0.05, 50.0)
+        self.spin_hx_h.setValue(2.0)
+        self.spin_hx_h.setSuffix("  m")
+        self.spin_hx_h.setToolTip("Active length of the heat exchanger")
+        fhx.addRow("H_hx:", self.spin_hx_h)
+
+        self.spin_hx_ua = QDoubleSpinBox()
+        self.spin_hx_ua.setRange(0.1, 1e6)
+        self.spin_hx_ua.setValue(5000.0)
+        self.spin_hx_ua.setDecimals(0)
+        self.spin_hx_ua.setSuffix("  W/K")
+        self.spin_hx_ua.setToolTip("Overall heat transfer coefficient of the HX")
+        fhx.addRow("UA:", self.spin_hx_ua)
+
+        self.spin_hx_mdot = QDoubleSpinBox()
+        self.spin_hx_mdot.setRange(0.0, 1000.0)
+        self.spin_hx_mdot.setValue(0.8)
+        self.spin_hx_mdot.setDecimals(2)
+        self.spin_hx_mdot.setSuffix("  kg/s")
+        self.spin_hx_mdot.setToolTip("Mass flow rate in the external loop")
+        fhx.addRow("ṁ_ext:", self.spin_hx_mdot)
+
+        self.spin_hx_tin = QDoubleSpinBox()
+        self.spin_hx_tin.setRange(-30.0, 200.0)
+        self.spin_hx_tin.setValue(85.0)
+        self.spin_hx_tin.setDecimals(1)
+        self.spin_hx_tin.setSuffix("  °C")
+        self.spin_hx_tin.setToolTip("Inlet temperature of the external fluid")
+        fhx.addRow("T_ext_in:", self.spin_hx_tin)
+
+        seg_row = QHBoxLayout()
+        self.chk_hx_segmented = QCheckBox("Segmented")
+        self.chk_hx_segmented.setToolTip(
+            "Track the external fluid node by node across the HX zone.\n"
+            "More accurate when the zone spans the thermocline."
+        )
+        self.combo_hx_flow_dir = QComboBox()
+        self.combo_hx_flow_dir.addItems(["↓ top-in", "↑ bottom-in"])
+        self.combo_hx_flow_dir.setEnabled(False)
+        seg_row.addWidget(self.chk_hx_segmented)
+        seg_row.addWidget(self.combo_hx_flow_dir)
+        fhx.addRow(seg_row)
+        self.chk_hx_segmented.stateChanged.connect(
+            lambda state: self.combo_hx_flow_dir.setEnabled(bool(state))
+        )
+
+        for wdg in (self.spin_hx_z, self.spin_hx_h, self.spin_hx_ua,
+                    self.spin_hx_mdot, self.spin_hx_tin, self.chk_hx_segmented):
+            wdg.setEnabled(False)
+        self.chk_hx_enable.stateChanged.connect(self._on_hx_enable_changed)
+
+        main_layout.addWidget(grp_hx)
 
         # --- Phase table ---
         grp_phases = QGroupBox("Operating Phases")
@@ -379,6 +455,14 @@ class SimControlWidget(QWidget):
                 item.setBackground(QColor(bg))
                 item.setForeground(QColor(fg))
 
+    def _on_hx_enable_changed(self, state):
+        """Enable/disable the heat-exchanger fields with the checkbox."""
+        enabled = bool(state)
+        for wdg in (self.spin_hx_z, self.spin_hx_h, self.spin_hx_ua,
+                    self.spin_hx_mdot, self.spin_hx_tin, self.chk_hx_segmented):
+            wdg.setEnabled(enabled)
+        self.combo_hx_flow_dir.setEnabled(enabled and self.chk_hx_segmented.isChecked())
+
     # ------------------------------------------------------------------
     # Slots
     # ------------------------------------------------------------------
@@ -427,6 +511,30 @@ class SimControlWidget(QWidget):
     def set_tank_height(self, height: float):
         """Update the tank height (for port height validation)."""
         self._tank_height = height
+
+    def get_hx_port(self) -> HeatExchangerPort | None:
+        """
+        Return the configured heat exchanger, or ``None`` if disabled.
+
+        Unlike hydraulic ports (which vary per phase), the HX is a single,
+        constant-parameter port applied to every phase of the run,
+        representing e.g. an always-on solar collector or auxiliary loop.
+        """
+        if not self.chk_hx_enable.isChecked():
+            return None
+        flow_direction = (
+            "upward" if self.combo_hx_flow_dir.currentIndex() == 1 else "downward"
+        )
+        return HeatExchangerPort(
+            z=self.spin_hx_z.value(),
+            H_hx=self.spin_hx_h.value(),
+            UA=self.spin_hx_ua.value(),
+            m_dot_ext=self.spin_hx_mdot.value(),
+            T_ext_in=self.spin_hx_tin.value(),
+            segmented=self.chk_hx_segmented.isChecked(),
+            flow_direction=flow_direction,
+            label="ui_hx",
+        )
 
     def get_phases(self) -> list[SimPhase]:
         """Read all phases from the table and return a list."""

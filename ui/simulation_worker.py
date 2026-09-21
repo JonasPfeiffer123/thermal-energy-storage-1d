@@ -18,6 +18,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from thermal_energy_storage_model import (
+    HeatExchangerPort,
     StorageInputs,
     StorageOutputs,
     StorageState,
@@ -110,6 +111,7 @@ class SimulationWorker(QThread):
         phases: list[SimPhase],
         dt: float,
         update_every_n: int = 1,
+        hx_port: HeatExchangerPort | None = None,
         parent=None,
     ):
         """
@@ -125,6 +127,10 @@ class SimulationWorker(QThread):
             Nominal timestep [s]. Sub-stepped as needed for CFL.
         update_every_n : int
             UI update only after every n-th step (performance).
+        hx_port : HeatExchangerPort, optional
+            Constant heat-exchanger port applied to every phase regardless
+            of its hydraulic mode (e.g. an always-on solar collector loop).
+            ``None`` disables it.
         """
         super().__init__(parent)
         self.storage = storage
@@ -132,6 +138,7 @@ class SimulationWorker(QThread):
         self.phases = phases
         self.dt = dt
         self.update_every_n = update_every_n
+        self.hx_port = hx_port
 
         self._pause_flag = False
         self._stop_flag = False
@@ -223,14 +230,22 @@ class SimulationWorker(QThread):
             self.error_occurred.emit(f"{type(exc).__name__}: {exc}")
 
     def _build_inputs(self, phase: SimPhase, height: float) -> StorageInputs:
-        """Build StorageInputs from a SimPhase."""
+        """Build StorageInputs from a SimPhase.
+
+        The optional HX port (if enabled) is applied regardless of the
+        phase's hydraulic mode: it represents a separate, always-on loop
+        (e.g. a solar collector) rather than part of the charge/discharge
+        cycle, so it stays active during idle phases too.
+        """
+        hx_ports = [self.hx_port] if self.hx_port is not None else []
+
         if phase.mode == "idle":
-            return StorageInputs(ports=[], hx_ports=[])
+            return StorageInputs(ports=[], hx_ports=hx_ports)
 
         m_c = phase.m_dot_charge if phase.mode in ("charge", "both") else 0.0
         m_d = phase.m_dot_discharge if phase.mode in ("discharge", "both") else 0.0
 
-        return StorageInputs.two_port(
+        inputs = StorageInputs.two_port(
             m_dot_charge=m_c,
             T_charge_in=phase.T_charge_in,
             m_dot_discharge=m_d,
@@ -241,3 +256,5 @@ class SimulationWorker(QThread):
             z_discharge_in=phase.z_discharge_in,
             z_discharge_out=phase.z_discharge_out,
         )
+        inputs.hx_ports = hx_ports
+        return inputs
