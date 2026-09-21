@@ -68,8 +68,11 @@ optionalen, standardmäßig übersprungenen Validierungsskripte berühren sie.
       (`tests/test_losses.py`; Steady-State-Fixpunkt analytisch hergeleitet
       und empirisch gegen einen konvergierten Langzeitlauf verifiziert, bevor
       er als Assertion verwendet wurde. `losses.py`-Coverage: 27 % → 99 %.)
-- [ ] Tests für `UniformDiffusor`: Gewichte summieren zu 1, Gleichverteilung
+- [x] Tests für `UniformDiffusor`: Gewichte summieren zu 1, Gleichverteilung
       über `H_zone`, Fallback auf nächsten Knoten bei zu grobem Grid.
+      (`tests/test_diffusors.py`, inkl. Solver-Integrationstest: Inflow
+      verteilt sich nachweislich auf mehrere Knoten, Energieerhaltung bleibt
+      erhalten. `diffusors.py`-Coverage: 52 % → 96 %.)
 - [ ] Tests für `HeatExchangerPort` lumped-Modus: ε-NTU-Formel, Energiebilanz
       (Wärmeeintrag in Tank = Enthalpieänderung des externen Kreises),
       mehrere gleichzeitige HX-Ports.
