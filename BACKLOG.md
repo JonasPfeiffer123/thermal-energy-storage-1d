@@ -107,8 +107,14 @@ optionalen, standardmäßig übersprungenen Validierungsskripte berühren sie.
       `steel_tank_aboveground` indirekt geprüft). (`tests/test_presets.py`,
       inkl. `ThermalStorage1D.from_preset()`, das ebenfalls ungetestet war.
       `presets.py`-Coverage: 73 % → 100 %.)
-- [ ] Tests für bislang unbenutzte Public API: `check_cfl()`, `get_soc()`,
-      `max_stable_dt()` (aktuell 0 Aufrufe in `tests/`).
+- [x] Tests für bislang unbenutzte Public API: `check_cfl()`, `get_soc()`,
+      `max_stable_dt()` (aktuell 0 Aufrufe in `tests/`). (`tests/test_public_api.py`)
+
+**P1 abgeschlossen.** Gesamt-Coverage: 66 % → 94 %
+(`geometry.py` 97 %, `losses.py` 99 %, `diffusors.py` 96 %, `solver.py` 91 %,
+`presets.py` 100 %). Verbleibende Lücken sind überwiegend abstrakte
+`NotImplementedError`-Stubs und einzelne `_validate_config`-Fehlerzweige;
+nicht weiter verfolgt, da geringer Grenznutzen.
 
 ## P2 – Validierung / Robustheit
 
