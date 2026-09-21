@@ -135,10 +135,65 @@ nicht weiter verfolgt, da geringer Grenznutzen.
 
 ## P3 – UI-Parität
 
-- [ ] `HeatExchangerPort` in `ui/config_panel.py` / `ui/main_window.py`
-      verfügbar machen (aktuell 0 Treffer – nur über Python-API nutzbar).
-- [ ] Headspace-Modell in der UI konfigurierbar machen (aktuell 0 Treffer).
-- [ ] `auto_substep`-Toggle in der UI ergänzen.
+- [x] Headspace-Modell in der UI konfigurierbar machen (aktuell 0 Treffer).
+      Neue Gruppe "Headspace (atmospheric storage)" im Numerics-Tab
+      (`ui/config_panel.py`), verdrahtet in `build_config()`,
+      `set_from_config()` und `config_to_dict()`.
+- [x] `auto_substep`-Toggle in der UI ergänzen. Checkbox in der
+      "Time integration"-Gruppe, ebenso vollständig verdrahtet.
+
+      **Dabei drei echte, vorbestehende Bugs im Save/Load-Pfad gefunden und
+      gefixt** (alle in `ui/config_panel.py` / `ui/main_window.py`):
+      1. `_dict_to_config()` konstruierte `SplitAmbientLoss` mit
+         `U_wall_body=ld["U_wall_body"]` – weder ist `U_wall_body` ein
+         gültiges Argument von `SplitAmbientLoss` (heißt `U_wall`), noch
+         schreibt `config_to_dict()` diesen Schlüssel jemals (schreibt
+         `"U_wall"`). Jede gespeicherte Konfiguration mit "Split lid/wall"-
+         Verlustmodell crashte beim erneuten Laden mit `KeyError`.
+      2. `_dict_to_config()` kannte `TransientGroundLoss` gar nicht – fiel
+         beim Laden lautlos auf `ConstantAmbientLoss` zurück (keine
+         Exception, aber falsche Physik). `TruncatedPyramidGeometry` und
+         `diffusor_model` fehlten in Serialisierung und Deserialisierung
+         ebenso vollständig.
+      3. `config_to_dict()`/`set_from_config()` griffen auf
+         `fluid.rho`/`fluid.cp`/`fluid.lambda_fluid` als Attribute zu –
+         das sind aber Methoden auf `FluidProperties` (Signatur `(T) ->
+         value`), keine Attribute. Da "Water (constant, 70 °C)" die
+         UI-Standardauswahl ist, crashte "Save configuration" mit
+         `TypeError: float() argument must be a ... not 'method'` bereits
+         bei der Standardkonfiguration – d. h. das Speicher-Feature war
+         praktisch nie funktionsfähig. Betraf beide Richtungen (Speichern
+         *und* `set_from_config()`).
+      Zusätzlich: `set_from_config()` stellte das Diffusor-Modell
+      (`PointDiffusor`/`UniformDiffusor`) trotz Unterstützung in
+      `build_config()` nie wieder her – ergänzt.
+- [x] `HeatExchangerPort` in der UI verfügbar machen (aktuell 0 Treffer –
+      nur über Python-API nutzbar). `HeatExchangerPort` hängt an
+      `StorageInputs` (pro Zeitschritt), nicht an `StorageConfig` – gehört
+      damit architektonisch zu `sim_control.py`/`simulation_worker.py`,
+      nicht zu `config_panel.py`. Umgesetzt als optionaler, für den
+      gesamten Lauf konstanter HX (z. B. Dauerbetrieb einer Solarschleife),
+      unabhängig vom Phasenmodus aktiv (auch während "idle"-Phasen) – neue
+      Gruppe "Heat Exchanger (optional)" in `sim_control.py`
+      (`get_hx_port()`), durchgereicht via `SimulationWorker(hx_port=...)`
+      in `main_window.py`. Lumped- und segmented-Modus inkl.
+      `flow_direction` unterstützt.
+
+      **Nebenbei gefunden und gefixt:** `matplotlib.cm.get_cmap()` wurde in
+      matplotlib 3.11 entfernt; da `pyproject.toml` `matplotlib>=3.7.0` ohne
+      Obergrenze deklariert, crashte `Tank3DWidget.__init__()` – und damit
+      `MainWindow()` insgesamt, da dieses Widget unbedingt konstruiert wird
+      – mit jeder aktuell installierten matplotlib-Version sofort beim
+      Start. Auf `matplotlib.colormaps[...]` umgestellt (unterstützt seit
+      3.5). Ohne diesen Fix ließ sich `MainWindow()` zum Verifizieren der
+      obigen Änderungen nicht einmal instanziieren.
+
+      Alle Rundläufe (`build_config ↔ set_from_config`,
+      `config_to_dict ↔ _dict_to_config`) für alle Geometrie-/Verlust-/
+      Diffusor-/Fluid-Kombinationen sowie der HX-Signalpfad wurden über
+      eine echte `MainWindow()`-Instanz end-to-end verifiziert (PyQt6 dafür
+      in dieser Session installiert). Visuelles Layout (Abstände,
+      Fensterproportionen) konnte nicht geprüft werden.
 
 ## P4 – Engineering-Prozess
 
