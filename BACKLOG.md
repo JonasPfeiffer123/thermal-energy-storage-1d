@@ -11,17 +11,39 @@ die Behebung, priorisiert nach Aufwand/Nutzen.
 
 Arbeitsweise: ein Item = ein Commit, Checkbox wird im selben Commit abgehakt.
 
+**Status (2026-09-21): P0–P4 vollständig abgearbeitet** auf Branch
+`chore/completeness-backlog` (17 Commits). Gesamt-Testabdeckung 66 % → 94 %,
+alle 138 Tests + `ruff` + `mypy` grün. Dabei sechs bisher unentdeckte reale
+Bugs gefunden und gefixt (nicht nur Testlücken):
+1. `HeatExchangerPort(segmented=True)` verarbeitete bei `flow_direction=
+   "downward"` (Standardwert) die Knoten in umgekehrter Reihenfolge
+   (solver.py) – nur bei Thermokline in der HX-Zone sichtbar.
+2. JSON-Laden einer `SplitAmbientLoss`-Konfiguration crashte mit
+   `KeyError: 'U_wall_body'` (main_window.py).
+3. JSON-Laden einer `TransientGroundLoss`-Konfiguration fiel lautlos auf
+   `ConstantAmbientLoss` zurück (main_window.py).
+4. "Save configuration" crashte für die UI-Standard-Fluidauswahl
+   (`fluid.rho`/`.cp`/`.lambda_fluid` als Attribut statt Methode gelesen;
+   config_panel.py, beide Richtungen).
+5. `MainWindow()` ließ sich mit aktuellem matplotlib (≥3.11) gar nicht mehr
+   konstruieren (`matplotlib.cm.get_cmap()` entfernt; viz3d_widget.py).
+6. `set_from_config()` stellte das Diffusor-Modell nie wieder her, obwohl
+   `build_config()` es seit je unterstützt (config_panel.py).
+
+Nicht abgearbeitet, siehe „Bewusst zurückgestellt" unten (FMI-Schnittstelle
+– eigenständiges Feature außerhalb des Härtungs-Scopes dieses Backlogs).
+
 ## P0 – Dokumentation & Code-Hygiene
 
-- [ ] **architecture.md ist veraltet.** Beschreibt das Paket noch als
+- [x] **architecture.md ist veraltet.** Beschreibt das Paket noch als
       Einzeldatei (`docs/architecture.md:20,30`), tatsächlich ist es seit der
       Modularisierung auf 10 Dateien unter `thermal_energy_storage_model/`
-      aufgeteilt. Modul-Übersicht und Datei-Beschreibung aktualisieren.
-- [ ] **physics.md Codebeispiel ist nicht lauffähig.** `docs/physics.md:650-651`
+      aufgeteilt. Modul-Übersicht und Datei-Beschreibung aktualisiert.
+- [x] **physics.md Codebeispiel ist nicht lauffähig.** `docs/physics.md:650-651`
       zeigt `Port(..., diffusor=UniformDiffusor(H_zone=1.0))` – `Port`
       (`thermal_energy_storage_model/ports.py:12-60`) hat kein `diffusor`-Feld;
       das Diffusor-Modell wird tankweit über `StorageConfig.diffusor_model`
-      gesetzt. Beispiel korrigieren und explizit dokumentieren, dass der
+      gesetzt. Beispiel korrigiert und explizit dokumentiert, dass der
       Diffusor pro Tank (nicht pro Port) gilt.
 - [x] **Toter Code entfernen.** `_port_to_node()`
       (`thermal_energy_storage_model/solver.py:1107`) wird nirgends mehr
