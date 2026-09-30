@@ -106,3 +106,39 @@ def tvd_correction(
             Q[k] += corr
             Q[k + 1] -= corr
     return Q
+
+
+def solve_tdma(
+    a: list[float],
+    d: list[float],
+    c: list[float],
+    b: list[float],
+) -> list[float]:
+    """
+    Solve a tridiagonal system A·x = b with the Thomas algorithm.
+
+    Same conventions as ``ThermalStorage1D._solve_tdma``: equation i reads
+    ``a[i]·x[i-1] + d[i]·x[i] + c[i]·x[i+1] = b[i]``; ``a[0]`` and ``c[-1]``
+    are not used. No pivoting (the storage matrices are diagonally
+    dominant).
+    """
+    # Forward elimination
+    d_prev = d[0]
+    b_prev = b[0]
+    d_mod = [d_prev]
+    b_mod = [b_prev]
+    for a_i, d_i, c_prev, b_i in zip(a[1:], d[1:], c, b[1:]):
+        w = a_i / d_prev
+        d_prev = d_i - w * c_prev
+        b_prev = b_i - w * b_prev
+        d_mod.append(d_prev)
+        b_mod.append(b_prev)
+
+    # Back substitution (built bottom-up, reversed at the end)
+    x_next = b_prev / d_prev
+    x = [x_next]
+    for i in range(len(d) - 2, -1, -1):
+        x_next = (b_mod[i] - c[i] * x_next) / d_mod[i]
+        x.append(x_next)
+    x.reverse()
+    return x

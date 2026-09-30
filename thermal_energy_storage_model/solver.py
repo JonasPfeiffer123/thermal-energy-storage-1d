@@ -9,7 +9,7 @@ from typing import cast
 
 import numpy as np
 
-from ._kernels import tvd_correction
+from ._kernels import solve_tdma, tvd_correction
 from .config import StorageConfig
 from .diffusors import DiffusorModel, PointDiffusor, UniformDiffusor
 from .fluids import ConstantFluidProperties, FluidProperties
@@ -818,7 +818,9 @@ class ThermalStorage1D:
 
         # --- Headspace heat exchange (if enabled) ---
         T_hs_new = state.T_headspace
+        headspace_active = False
         if cfg.headspace and state.T_headspace is not None:
+            headspace_active = True
             Q_hs, T_hs_new = self._compute_headspace_exchange(
                 state.T_headspace, T[0], dt
             )
@@ -828,14 +830,21 @@ class ThermalStorage1D:
             # --- Fully implicit Euler step (TDMA), optional deferred TVD ---
             Q_tvd_explicit = None
             if cfg.advection_scheme == "tvd" and n >= 3:
-                F_int = F[1:-1]
-                Q_tvd_explicit = self._compute_tvd_correction_ports(
-                    T, F_int, cp_mean, dt
+                Q_tvd_explicit = tvd_correction(
+                    T_list, F_list[1:-1], cp_mean, dt, self._tvd_denominator
                 )
-            T_new = self._step_implicit(
-                T, dt, F, S, T_src, C_nodes, K_cond_iface_T, cp_mean, Q_hx_nodes,
-                Q_tvd_explicit=Q_tvd_explicit,
+            # Zero heat-exchanger terms (no HX, no headspace) are skipped.
+            Q_hx_list = (
+                Q_hx_nodes.tolist()
+                if inputs.hx_ports or headspace_active
+                else None
             )
+            T_new = np.array(self._step_implicit(
+                T_list, dt, F_list, S_list, T_src_nodes, C_nodes.tolist(),
+                K_cond_iface_T.tolist(), cp_mean,
+                self._node_list(self._compute_losses(T)),
+                Q_hx_list, Q_tvd_explicit,
+            ))
         else:
             # --- Compute temperature-rate terms ---
             dT_dt = np.zeros(n)
@@ -879,23 +888,31 @@ class ThermalStorage1D:
             T_headspace=T_hs_new,
         )
 
+    def _node_list(self, values) -> list[float]:
+        """Per-node values (array-like, broadcastable to n) as a list."""
+        arr = np.asarray(values)
+        if arr.shape != (self.n,):
+            arr = np.broadcast_to(arr, (self.n,))
+        return arr.tolist()
+
     # ------------------------------------------------------------------
     # Implicit solver (TDMA)
     # ------------------------------------------------------------------
 
     def _step_implicit(
         self,
-        T: np.ndarray,
+        T: list[float],
         dt: float,
-        F: np.ndarray,
-        S: np.ndarray,
-        T_src: np.ndarray,
-        C_nodes: np.ndarray,
-        K_cond_iface: np.ndarray,
+        F: list[float],
+        S: list[float],
+        T_src: dict[int, float],
+        C_nodes: list[float],
+        K_cond_iface: list[float],
         cp: float,
-        Q_hx_nodes: np.ndarray | None = None,
-        Q_tvd_explicit: np.ndarray | None = None,
-    ) -> np.ndarray:
+        Q_loss_nodes: list[float],
+        Q_hx_nodes: list[float] | None = None,
+        Q_tvd_explicit: list[float] | None = None,
+    ) -> list[float]:
         """
         Fully implicit Euler step with upwind advection (TDMA), optional
         deferred TVD anti-diffusion correction.
@@ -920,95 +937,104 @@ class ThermalStorage1D:
         At moderate CFL the correction reduces the upwind smearing of
         thermocline fronts.
 
+        All vectors are lists of Python floats (see :mod:`._kernels` for
+        why); the coefficients are accumulated in the order of the former
+        array formulation, so the result is bit-identical to it.
+
         Parameters
         ----------
-        T : np.ndarray
-            Temperature profile at current time [°C], shape (n,).
+        T : list[float]
+            Temperature profile at current time [°C], length n.
         dt : float
             Timestep size [s].
-        F : np.ndarray
-            Inter-node flow vector [kg/s], shape (n+1). F[0]=F[n]=0.
-        S : np.ndarray
-            Net source term per node [kg/s], shape (n,).
-        T_src : np.ndarray
-            Mass-flow-weighted inlet temperature per node [°C], shape (n,).
-        C_nodes : np.ndarray
-            Thermal node capacity [J/K], shape (n,).
-        K_cond_iface : np.ndarray
+        F : list[float]
+            Inter-node flow vector [kg/s], length n+1 (see
+            :meth:`_port_flows`); only the internal faces F[1..n-1] are used.
+        S : list[float]
+            Net source term per node [kg/s], length n.
+        T_src : dict[int, float]
+            Mass-flow-weighted inlet temperature of the nodes with inflow [°C].
+        C_nodes : list[float]
+            Thermal node capacity [J/K], length n.
+        K_cond_iface : list[float]
             Conduction coefficient at each internal interface [W/K],
-            shape (n-1,). K_cond_iface[k] lies between nodes k and k+1.
+            length n-1. K_cond_iface[k] lies between nodes k and k+1.
         cp : float
             Representative cp value for advection term [J/(kg·K)].
-        Q_hx_nodes : np.ndarray, optional
-            Heat-exchanger source terms per node [W], shape (n). Added to
-            right-hand side (explicitly linearized). Default: None (= 0).
-        Q_tvd_explicit : np.ndarray, optional
-            Deferred TVD anti-diffusion correction per node [W], shape (n).
+        Q_loss_nodes : list[float]
+            Wall heat flow per node at T_old [W] (loss model), added to the
+            right-hand side (explicitly linearized).
+        Q_hx_nodes : list[float], optional
+            Heat-exchanger/headspace source terms per node [W], length n.
+            Added to right-hand side (explicitly linearized). Default: None (= 0).
+        Q_tvd_explicit : list[float], optional
+            Deferred TVD anti-diffusion correction per node [W], length n.
             Caller computes it from T_old (matching the explicit-path
             convention) and passes it in when ``advection_scheme == "tvd"``.
             Default: None (= 0, pure implicit upwind).
+
+        Returns
+        -------
+        list[float]
+            Temperature profile at t+dt [°C], length n.
         """
-        n = self.n
-        K = K_cond_iface        # (n-1,)
-        C_dt = C_nodes / dt     # thermal capacity / dt [W/K]
+        K = K_cond_iface                          # (n-1,)
+        C_dt = [C / dt for C in C_nodes]          # thermal capacity / dt [W/K]
 
         # Diagonals: d[i]*T_new[i] + a[i]*T_new[i-1] + c[i]*T_new[i+1] = b[i]
-        a = np.zeros(n)         # lower off-diagonal (coeff. of T_new[i-1])
-        d = np.zeros(n)         # main diagonal
-        c = np.zeros(n)         # upper off-diagonal (coeff. of T_new[i+1])
-        b = np.zeros(n)
-
-        # --- Base term: time derivative ---
-        d += C_dt
-        b += C_dt * T
-
-        # --- Heat losses (explicitly linearized -> RHS) ---
-        b += self._compute_losses(T)
-
-        # --- Heat exchangers (explicitly linearized -> RHS) ---
-        if Q_hx_nodes is not None:
-            b += Q_hx_nodes
-
-        # --- Deferred TVD anti-diffusion (explicit, -> RHS) ---
-        # Conservatively distributed in _compute_tvd_correction_ports so
-        # sum(Q_tvd) = 0 by construction → energy-conserving correction.
-        if Q_tvd_explicit is not None:
-            b += Q_tvd_explicit
-
-        # --- Conduction (implicit) ---
-        # Interface k (between nodes k and k+1), k = 0..n-2:
-        #   Node k:     d[k]   += K[k],  c[k]   -= K[k]
-        #   Node k+1:   d[k+1] += K[k],  a[k+1] -= K[k]
-        d[:-1]  += K
-        c[:-1]  -= K
-        d[1:]   += K
-        a[1:]   -= K
 
         # --- Advection (implicit, upwind) ---
-        # Interface j (between nodes j-1 and j), j = 1..n-1,
-        # corresponds to index k = j-1 in F[k+1]:
-        #   F_val > 0 (downward): upwind = T_new[k]
-        #     -> d[k]   += F_val*cp   (node k: heat leaves downward)
-        #        a[k+1] -= F_val*cp   (node k+1: receives heat from T_new[k])
-        #   F_val < 0 (upward): upwind = T_new[k+1]
-        #     -> c[k]   += F_val*cp   (node k: receives heat from T_new[k+1]; F_val<0 -> c[k] decreases)
-        #        d[k+1] -= F_val*cp   (node k+1: heat leaves upward; F_val<0 -> d[k+1] increases)
-        for k in range(n - 1):
-            F_val = float(F[k + 1]) * cp
-            if F_val >= 0.0:
-                d[k]     += F_val
-                a[k + 1] -= F_val
-            else:
-                c[k]     += F_val
-                d[k + 1] -= F_val
+        # Interface k (between nodes k and k+1), F_val = F[k+1]·cp:
+        #   downward (F_val >= 0): upwind = T_new[k]
+        #     -> d[k]   += F_val   (node k: heat leaves downward)
+        #        a[k+1] -= F_val   (node k+1: receives heat from T_new[k])
+        #   upward (F_val < 0): upwind = T_new[k+1]
+        #     -> c[k]   += F_val   (node k: receives heat from T_new[k+1])
+        #        d[k+1] -= F_val   (node k+1: heat leaves upward)
+        # F_val is split into a downward and an upward part (the other one
+        # 0.0) so every coefficient is written in a single pass; adding 0.0
+        # leaves the (nonzero) coefficients unchanged.
+        # (Not min/max: a NaN flow must take the upward branch, as before.)
+        F_val = [f * cp for f in F[1:-1]]
+        down = [f if f >= 0.0 else 0.0 for f in F_val]   # noqa: FURB136
+        up = [0.0 if f >= 0.0 else f for f in F_val]     # noqa: FURB136
+
+        # --- Main diagonal ---
+        # Time derivative, conduction across the interface below (K[i]) and
+        # above (K[i-1]), advection across the interface above (upward part)
+        # and below (downward part); same order as the array version
+        #   d = 0 + C/dt;  d[:-1] += K;  d[1:] += K;  interface loop k = 0..n-2
+        d = [
+            (((0.0 + c_dt) + k_below) + k_above) - up_above + down_below
+            for c_dt, k_below, k_above, up_above, down_below in zip(
+                C_dt, [*K, 0.0], [0.0, *K], [0.0, *up], [*down, 0.0]
+            )
+        ]
+        # --- Off-diagonals: conduction (0 - K), then advection ---
+        a = [0.0, *[(0.0 - k) - f for k, f in zip(K, down)]]
+        c = [*[(0.0 - k) + f for k, f in zip(K, up)], 0.0]
+
+        # --- Right-hand side ---
+        # Time derivative; heat losses and heat exchangers (explicitly
+        # linearized); deferred TVD anti-diffusion (explicit; conservatively
+        # distributed, so it does not change the energy balance).
+        b = [(0.0 + c_dt * t) + q for c_dt, t, q in zip(C_dt, T, Q_loss_nodes)]
+        if Q_hx_nodes is not None:
+            b = [b_i + q for b_i, q in zip(b, Q_hx_nodes)]
+        if Q_tvd_explicit is not None:
+            b = [b_i + q for b_i, q in zip(b, Q_tvd_explicit)]
 
         # --- Port source-term energy (semi-implicit) ---
         # Inlet (m_dot > 0): known inlet temperature -> RHS
         # Outlet (m_dot < 0): outlet with current node temperature -> implicit
-        d -= cp * np.minimum(S, 0.0)             # outlet: implicit
-        b += cp * np.maximum(S, 0.0) * T_src     # inlet: RHS
+        # Nodes without net port flow receive a zero contribution.
+        for k, s in enumerate(S):
+            if s < 0.0:
+                d[k] -= cp * s                       # outlet: implicit
+            elif s > 0.0:
+                b[k] += cp * s * T_src[k]            # inlet: RHS
 
-        return self._solve_tdma(a, d, c, b)
+        return solve_tdma(a, d, c, b)
 
     @staticmethod
     def _solve_tdma(
@@ -1021,7 +1047,8 @@ class ThermalStorage1D:
         Solve a tridiagonal linear system A·x = b (Thomas algorithm).
 
         Runtime O(N), low memory overhead, numerically stable for
-        diagonally dominant systems.
+        diagonally dominant systems. Wrapper around
+        :func:`._kernels.solve_tdma`.
 
         Parameters
         ----------
@@ -1041,23 +1068,9 @@ class ThermalStorage1D:
         np.ndarray
             Solution vector x.
         """
-        n = len(d)
-        d_ = d.copy()
-        b_ = b.copy()
-
-        # Forward elimination
-        for i in range(1, n):
-            w = a[i] / d_[i - 1]
-            d_[i] -= w * c[i - 1]
-            b_[i] -= w * b_[i - 1]
-
-        # Back substitution
-        x = np.empty(n)
-        x[-1] = b_[-1] / d_[-1]
-        for i in range(n - 2, -1, -1):
-            x[i] = (b_[i] - c[i] * x[i + 1]) / d_[i]
-
-        return x
+        return np.array(solve_tdma(
+            *(np.asarray(v, dtype=float).tolist() for v in (a, d, c, b))
+        ))
 
     # ------------------------------------------------------------------
     # Private helper methods for heat-transport terms
