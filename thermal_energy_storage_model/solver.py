@@ -9,7 +9,7 @@ from typing import cast
 
 import numpy as np
 
-from ._kernels import solve_tdma, tvd_correction
+from ._kernels import convective_adjustment, solve_tdma, tvd_correction
 from .config import StorageConfig
 from .diffusors import DiffusorModel, PointDiffusor, UniformDiffusor
 from .fluids import ConstantFluidProperties, FluidProperties
@@ -287,6 +287,7 @@ class ThermalStorage1D:
         self._A_cross_nodes: np.ndarray = geom.A_cross_nodes(n)
         self._V_nodes: np.ndarray = geom.V_nodes(n)
         self._m_nodes: np.ndarray = cfg.rho * self._V_nodes
+        self._m_nodes_list: list[float] = self._m_nodes.tolist()
         self._C_nodes: np.ndarray = self._m_nodes * cfg.cp
 
         # Representative cross-section for CFL calculation: smallest area
@@ -839,12 +840,12 @@ class ThermalStorage1D:
                 if inputs.hx_ports or headspace_active
                 else None
             )
-            T_new = np.array(self._step_implicit(
+            T_new = self._step_implicit(
                 T_list, dt, F_list, S_list, T_src_nodes, C_nodes.tolist(),
                 K_cond_iface_T.tolist(), cp_mean,
                 self._node_list(self._compute_losses(T)),
                 Q_hx_list, Q_tvd_explicit,
-            ))
+            )
         else:
             # --- Compute temperature-rate terms ---
             dT_dt = np.zeros(n)
@@ -864,18 +865,18 @@ class ThermalStorage1D:
             dT_dt += Q_hx_nodes / C_nodes
 
             # --- Explicit Euler integration ---
-            T_new = T + dt * dT_dt
+            T_new = (T + dt * dT_dt).tolist()
 
         # --- Buoyancy correction: convective adjustment ---
         if self.config.buoyancy:
-            T_new = self._convective_adjustment(T_new, self._m_nodes)
+            T_new = convective_adjustment(T_new, self._m_nodes_list)
 
         # --- Update transient state of loss model ---
         self._loss_model.advance(T, self.A_wall, self._z_nodes, dt)
 
         Q_loss = float(-np.sum(self._compute_losses(T)))
         new_state = StorageState(
-            temperatures=T_new,
+            temperatures=np.array(T_new),
             time=state.time + dt,
             T_headspace=T_hs_new,
         )
@@ -1112,7 +1113,8 @@ class ThermalStorage1D:
             Write back averaged temperatures for each zone.
 
         The method is exactly energy-conserving and O(N), because each node
-        is pushed to the stack at most once and popped at most once.
+        is pushed to the stack at most once and popped at most once. It runs
+        on Python floats (:func:`._kernels.convective_adjustment`).
 
         Parameters
         ----------
@@ -1128,29 +1130,10 @@ class ThermalStorage1D:
         np.ndarray
             Corrected temperature profile, stable everywhere (T[i] ≥ T[i+1]).
         """
-        n = len(T)
-        # Stack: each item = [m*T_sum, mass_sum, start_index]
-        # Process from index 0 (top) to N-1 (bottom).
-        blocks: list = []   # [T_wm, m_sum, start_idx]
-        for i in range(n):
-            T_wm = float(T[i] * m_nodes[i])
-            m_sum = float(m_nodes[i])
-            start = i
-            # While last zone is colder than current one: merge
-            while blocks and blocks[-1][0] / blocks[-1][1] < T_wm / m_sum:
-                prev = blocks.pop()
-                T_wm  += prev[0]
-                m_sum += prev[1]
-                start  = prev[2]
-            blocks.append([T_wm, m_sum, start])
-
-        # Write back results
-        result = T.copy()
-        for k in range(len(blocks)):
-            T_mix = blocks[k][0] / blocks[k][1]
-            end   = blocks[k + 1][2] if k + 1 < len(blocks) else n
-            result[blocks[k][2]:end] = T_mix
-        return result
+        return np.array(convective_adjustment(
+            np.asarray(T, dtype=float).tolist(),
+            np.asarray(m_nodes, dtype=float).tolist(),
+        ))
 
     # ------------------------------------------------------------------
     # Port helper methods

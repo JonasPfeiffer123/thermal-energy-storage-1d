@@ -142,3 +142,53 @@ def solve_tdma(
         x.append(x_next)
     x.reverse()
     return x
+
+
+def convective_adjustment(T: list[float], m: list[float]) -> list[float]:
+    """
+    Mix unstable layers (a colder layer above a warmer one), top to bottom.
+
+    Stack-based O(n) algorithm of ``ThermalStorage1D._convective_adjustment``:
+    every node starts as its own mixing zone (mean temperature
+    ``(T·m)/m``) and merges with the zone above while that zone is colder.
+
+    Parameters
+    ----------
+    T : list[float]
+        Node temperatures [°C], index 0 = top.
+    m : list[float]
+        Node masses [kg].
+
+    Returns
+    -------
+    list[float]
+        Mass-weighted zone mean temperature of every node.
+    """
+    energy: list[float] = []   # Σ T·m per zone
+    mass: list[float] = []     # Σ m per zone
+    start: list[int] = []      # first node of the zone
+    mean: list[float] = []     # zone mean temperature
+    for i, (T_i, m_i) in enumerate(zip(T, m)):
+        e = T_i * m_i
+        m_sum = m_i
+        first = i
+        T_mix = e / m_sum
+        # While the zone above is colder: merge
+        while mean and mean[-1] < T_mix:
+            e += energy.pop()
+            m_sum += mass.pop()
+            first = start.pop()
+            mean.pop()
+            T_mix = e / m_sum
+        energy.append(e)
+        mass.append(m_sum)
+        start.append(first)
+        mean.append(T_mix)
+
+    n = len(T)
+    if len(mean) == n:          # no mixing: every node is its own zone
+        return mean
+    result: list[float] = []
+    for T_mix, first, end in zip(mean, start, [*start[1:], n]):
+        result.extend([T_mix] * (end - first))
+    return result
