@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Callable
+from itertools import accumulate
 from typing import cast
 
 import numpy as np
 
 from .config import StorageConfig
-from .diffusors import DiffusorModel, PointDiffusor
+from .diffusors import DiffusorModel, PointDiffusor, UniformDiffusor
 from .fluids import ConstantFluidProperties, FluidProperties
 from .geometry import CylinderGeometry, GeometryModel
 from .losses import ConstantAmbientLoss, LossModel
@@ -305,7 +306,14 @@ class ThermalStorage1D:
         #   K_iface[k] = λ_eff · A_iface[k] / dz
         #   A_iface[k] = mean cross-section between node k and k+1
         A_iface = 0.5 * (self._A_cross_nodes[:-1] + self._A_cross_nodes[1:])
+        self._A_iface: np.ndarray = A_iface
         self._K_cond_iface: np.ndarray = self._lambda_eff * A_iface / self.dz
+
+        # Per-interface TVD Courant-number denominator ρ · A_iface · Δz [kg],
+        # evaluated in the same operation order as the per-step formula.
+        self._tvd_denominator: list[float] = [
+            cfg.rho * a * self.dz for a in A_iface.tolist()
+        ]
 
         # Backward-compatible scalar quantities (representative of mid node)
         self.m_node: float = float(np.mean(self._m_nodes))
@@ -338,6 +346,13 @@ class ThermalStorage1D:
             self._diffusor: DiffusorModel = cfg.diffusor_model
         else:
             self._diffusor = PointDiffusor()
+
+        # Port height -> (node, weight) pairs of the built-in diffusor models,
+        # whose mapping depends only on the port height (see _port_weights).
+        self._port_weight_cache: dict = {}
+
+        # Total nominal heat capacity [J/K] (E_max in get_soc)
+        self._C_total: float = float(np.sum(self._C_nodes))
 
     def _compute_wall_areas(self) -> np.ndarray:
         """
@@ -501,7 +516,7 @@ class ThermalStorage1D:
                 f"T_max ({T_max}) must be greater than T_min ({T_min})."
             )
         E_current = self.get_stored_energy(state, T_ref=T_min)
-        E_max = float(np.sum(self._C_nodes)) * (T_max - T_min)
+        E_max = self._C_total * (T_max - T_min)
         return float(np.clip(E_current / E_max, 0.0, 1.0))
 
     def max_stable_dt(self, m_dot_max: float) -> float:
@@ -726,8 +741,10 @@ class ThermalStorage1D:
         n = self.n
 
         # --- Port-based mass flows and source terms ---
-        F    = self._compute_inter_node_fluxes(inputs.ports)
-        S, T_src = self._compute_source_terms(inputs.ports)
+        S_list, F_list, T_src_nodes, port_weights = self._port_flows(inputs.ports)
+        F = np.array(F_list)
+        S = np.array(S_list)
+        T_src = self._dense_T_src(T_src_nodes)
 
         # --- Temperature-dependent fluid properties for this timestep ---
         rho_T = np.asarray(self._fluid.rho(T), dtype=float)
@@ -747,8 +764,7 @@ class ThermalStorage1D:
         # node-wise evaluation. The advection cp below is treated the same way.
         T_mean = float(T.mean())
         lambda_eff_T = float(self._fluid.lambda_fluid(T_mean)) * cfg.lambda_eff_factor
-        A_iface = 0.5 * (self._A_cross_nodes[:-1] + self._A_cross_nodes[1:])
-        K_cond_iface_T = lambda_eff_T * A_iface / self.dz
+        K_cond_iface_T = lambda_eff_T * self._A_iface / self.dz
 
         # Representative cp for advection term (profile mean)
         cp_mean = float(np.mean(cp_T))
@@ -788,11 +804,15 @@ class ThermalStorage1D:
         # --- Port outlet temperatures (from current state) ---
         # For outlet ports this is the mass-flow-weighted node temperature
         # in the diffusor zone (for PointDiffusor: exactly one node).
-        port_temperatures = [
-            float(sum(w * T[k]
-                      for k, w in self._diffusor.node_weights(p, self._z_nodes)))
-            for p in inputs.ports
-        ]
+        # Summed sequentially on purpose: Python >= 3.12 sum() compensates
+        # float rounding, which would change multi-node results.
+        T_list = T.tolist()
+        port_temperatures = []
+        for weights in port_weights:
+            T_port = 0.0
+            for k, w in weights:
+                T_port += w * T_list[k]
+            port_temperatures.append(T_port)
 
         # --- Heat-exchanger source terms (epsilon-NTU, explicitly linearized) ---
         Q_hx_nodes, hx_outlet_temperatures = self._compute_hx_source_terms(
@@ -1126,6 +1146,88 @@ class ThermalStorage1D:
     # Port helper methods
     # ------------------------------------------------------------------
 
+    def _port_weights(self, port) -> list[tuple[int, float]]:
+        """
+        ``(node_index, weight)`` pairs of one port (see :class:`DiffusorModel`).
+
+        The built-in :class:`PointDiffusor` and :class:`UniformDiffusor`
+        map a port by its height alone, so their result is cached per
+        height (and zone width); any other diffusor model is queried on
+        every call, since it may depend on further port attributes.
+        """
+        diffusor = self._diffusor
+        cls = type(diffusor)
+        if cls is PointDiffusor:
+            key: object = port.z
+        elif cls is UniformDiffusor:
+            key = (port.z, cast(UniformDiffusor, diffusor).H_zone)
+        else:
+            return diffusor.node_weights(port, self._z_nodes)
+        cache = self._port_weight_cache
+        weights = cache.get(key)
+        if weights is None:
+            if len(cache) >= 256:   # bound memory for continuously varying z
+                cache.clear()
+            weights = cache[key] = diffusor.node_weights(port, self._z_nodes)
+        return weights
+
+    def _port_flows(self, ports: list) -> tuple:
+        """
+        Port mass flows mapped to the grid, as Python floats.
+
+        Single pass over all ports that yields everything the solver needs
+        per step; the arithmetic (and its order) is that of
+        :meth:`_compute_source_terms` and :meth:`_compute_inter_node_fluxes`,
+        so the values are bit-identical to theirs.
+
+        Returns
+        -------
+        S : list[float]
+            Net source term per node [kg/s], length n.
+        F : list[float]
+            Inter-node flow [kg/s], length n+1, ``F[0] = 0``,
+            ``F[j] = S[0] + ... + S[j-1]`` (summed sequentially like
+            ``np.cumsum``).
+        T_src : dict[int, float]
+            Mass-flow-weighted inlet temperature [°C] of every node with
+            inflow; nodes without inflow are absent (value 0).
+        weights : list[list[tuple[int, float]]]
+            ``(node, weight)`` pairs of each port, in port order.
+        """
+        S = [0.0] * self.n
+        S_pos: dict[int, float] = {}
+        T_src_weighted: dict[int, float] = {}
+        weights = []
+        for port in ports:
+            port_weights = self._port_weights(port)
+            weights.append(port_weights)
+            m_dot = port.m_dot
+            for k, w in port_weights:
+                # Products keep the operand types' semantics (e.g. float32
+                # inputs); float() mirrors adding them into a float64 array.
+                m_part = m_dot * w
+                m_part_f = float(m_part)
+                S[k] += m_part_f
+                if m_part > 0.0:
+                    S_pos[k] = S_pos.get(k, 0.0) + m_part_f
+                    T_src_weighted[k] = (
+                        T_src_weighted.get(k, 0.0) + float(m_part * port.T_in)
+                    )
+        T_src = {
+            k: T_src_weighted[k] / max(s_pos, 1e-30)
+            for k, s_pos in S_pos.items()
+            if s_pos > 0.0
+        }
+        F = [0.0, *accumulate(S)]
+        return S, F, T_src, weights
+
+    def _dense_T_src(self, T_src: dict) -> np.ndarray:
+        """Inlet temperatures from :meth:`_port_flows` as a length-n array."""
+        arr = np.zeros(self.n)
+        for k, value in T_src.items():
+            arr[k] = value
+        return arr
+
     def _compute_inter_node_fluxes(self, ports: list) -> np.ndarray:
         """
         Compute inter-node mass-flow vector F [kg/s].
@@ -1148,14 +1250,7 @@ class ThermalStorage1D:
         np.ndarray
             Flow vector, shape (n_nodes + 1,).
         """
-        n = self.n
-        S = np.zeros(n)
-        for port in ports:
-            for k, w in self._diffusor.node_weights(port, self._z_nodes):
-                S[k] += port.m_dot * w
-        F = np.zeros(n + 1)
-        F[1:] = np.cumsum(S)
-        return F
+        return np.array(self._port_flows(ports)[1])
 
     def _compute_source_terms(self, ports: list) -> tuple:
         """
@@ -1176,24 +1271,8 @@ class ThermalStorage1D:
             Mass-flow-weighted inlet temperature per node [°C],
             shape (n_nodes,). Relevant only for nodes with active inlet.
         """
-        n = self.n
-        S = np.zeros(n)
-        S_pos = np.zeros(n)        # Sum of positive inlets per node
-        T_src_weighted = np.zeros(n)
-        for port in ports:
-            for k, w in self._diffusor.node_weights(port, self._z_nodes):
-                m_part = port.m_dot * w
-                S[k] += m_part
-                if m_part > 0.0:
-                    S_pos[k] += m_part
-                    T_src_weighted[k] += m_part * port.T_in
-        # Mass-flow-weighted mean; 0 where no inlet exists
-        T_src = np.where(
-            S_pos > 0.0,
-            T_src_weighted / np.maximum(S_pos, 1e-30),
-            0.0,
-        )
-        return S, T_src
+        S, _, T_src, _ = self._port_flows(ports)
+        return np.array(S), self._dense_T_src(T_src)
 
     def _compute_advection_ports(
         self,
@@ -1311,7 +1390,7 @@ class ThermalStorage1D:
         cfg = self.config
         dT = np.diff(T)   # T[k+1] - T[k], shape (N-1,)
         Q_tvd = np.zeros(n)
-        A_iface = 0.5 * (self._A_cross_nodes[:-1] + self._A_cross_nodes[1:])
+        A_iface = self._A_iface
 
         for k in range(n - 1):
             F_k = float(F_int[k])
