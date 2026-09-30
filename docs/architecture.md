@@ -27,6 +27,7 @@ thermal_energy_storage_model/            Modular Python package (core model)
     ports.py                             Port, HeatExchangerPort
     diffusors.py                         PointDiffusor, UniformDiffusor
     solver.py                            ThermalStorage1D (explicit/implicit Euler, TDMA)
+    _kernels.py                          Per-step loops on Python floats (TVD, TDMA, buoyancy)
     model.py                             Facade re-export of ThermalStorage1D
     presets.py                           StoragePresets factory
 examples/example_simulation.py           Three example scenarios
@@ -37,6 +38,7 @@ benchmark/
     dronninglund_validation.py           Validation vs. Dronninglund PTES 2014
     hoje_taastrup_validation.py          Validation vs. Høje Taastrup PTES 2024
     compare_runs.py                      Compare named benchmark runs
+    benchmark_step_performance.py        Wall-clock cost of one step() (co-simulation use)
     results/                             Pre-computed plots and CSVs
 ```
 
@@ -112,23 +114,40 @@ ThermalStorage1D.__init__()
         └──────────────────────────────────────────────────┘
 
 storage.step(state, dt, inputs)
-    ├── _compute_inter_node_fluxes()     Mass balance → F[i→i+1]
-    │       └── diffusor.node_weights()  Port → weighted node distribution
-    ├── _compute_source_terms()          Port heat sources per node
-    │       └── diffusor.node_weights()  (same distribution)
+    ├── _port_flows()                    Port sources S, inter-node flows F, inlet T
+    │       └── _port_weights()          diffusor.node_weights(), cached per port height
+    ├── _fluid_state()                   rho, cp → node heat capacities, mean cp
+    │                                    (shared with get_soc() for the same profile)
     ├── _compute_hx_source_terms()       Heat exchanger source terms (ε-NTU)
     │       └── _get_hx_weights()        HX zone → equally weighted nodes
-    ├── _compute_advection_ports()       Upwind advection term
-    ├── _compute_tvd_correction_ports()  (only when advection_scheme="tvd")
-    ├── _compute_conduction()            Conduction term
     ├── _compute_losses()                loss_model.Q_loss_nodes()
-    ├── Explicit: Euler integration → T_new  (incl. Q_hx / C_nodes)
-    │   or Implicit: _step_implicit() → _solve_tdma() → T_new
-    │                (b += Q_hx_nodes, explicitly linearized)
-    ├── _convective_adjustment()         (only when buoyancy=True)
-    └── port_temperatures computed       diffusor.node_weights() → StorageOutputs
+    ├── Explicit: _compute_advection_ports() (+ _compute_tvd_correction_ports()),
+    │   _compute_conduction(), Euler integration → T_new  (incl. Q_hx / C_nodes)
+    │   or Implicit: _kernels.tvd_fluxes() (only when advection_scheme="tvd")
+    │                _step_implicit() → _kernels.implicit_solve() → T_new
+    │                (assembly inside the TDMA forward sweep;
+    │                 b += Q_loss + Q_hx + Q_tvd, explicitly linearized)
+    ├── _kernels.convective_adjustment() (only when buoyancy=True)
+    └── port_temperatures computed       port weights → StorageOutputs
         hx_outlet_temperatures           ε-NTU → T_ext_out per HX port
 ```
+
+### Performance of `step()`
+
+In co-simulation `step()` runs once per coupling interval on small grids
+(5–50 nodes), where the cost of a NumPy call (~0.4 µs, independent of
+the array length) dominates the arithmetic. The per-step loops (TVD
+correction, matrix assembly and Thomas algorithm, convective adjustment,
+`WaterProperties` for up to 32 nodes) therefore run on Python floats in
+`_kernels.py`; configuration constants (interface areas, TVD denominators,
+port → node mapping) are computed once, and NumPy is used where its pairwise
+summation defines the result (`T_mean`, mean cp, `Q_loss`, stored energy).
+Every kernel performs the floating-point operations of the former array code
+in the same order, so results are bit-identical to v1.0.0:
+`tests/test_golden_master.py` compares complete one-year trajectories of 133
+configurations, `tests/test_kernels.py` the kernels against the former array
+implementations. `benchmark/benchmark_step_performance.py` measures the
+per-step cost.
 
 ### State Objects
 
