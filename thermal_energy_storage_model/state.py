@@ -94,7 +94,11 @@ class StorageState:
     @property
     def T_mean(self) -> float:
         """Mean temperature across all layers [°C]."""
-        return float(np.mean(self.temperatures))
+        T = self.temperatures
+        if type(T) is np.ndarray and T.dtype == np.float64 and T.size:
+            # Same pairwise sum and division as np.mean, minus its overhead
+            return float(np.add.reduce(T, axis=None)) / T.size
+        return float(np.mean(T))
 
 
 @dataclass
