@@ -108,13 +108,33 @@ class WaterProperties(FluidProperties):
         >>> fluid.rho(T)       # → array(...)
     """
 
+    # Polynomial coefficients (c2, c1, c0) of c2·T² + c1·T + c0, T in °C
+    _RHO_COEFFS = (-2.525726e-3, -2.123038e-1, 1.005011e3)
+    _CP_COEFFS = (9.776500e-3, -7.677243e-1, 4.194836e3)
+
     def rho(self, T: float | np.ndarray) -> float | np.ndarray:
         """ρ(T) = -2.525726e-3·T² - 2.123038e-1·T + 1.005011e3  [kg/m³]"""
-        return -2.525726e-3 * T**2 - 2.123038e-1 * T + 1.005011e3
+        c2, c1, c0 = self._RHO_COEFFS
+        return c2 * T**2 + c1 * T + c0
 
     def cp(self, T: float | np.ndarray) -> float | np.ndarray:
         """cp(T) = 9.776500e-3·T² - 7.677243e-1·T + 4.194836e3  [J/(kg·K)]"""
-        return 9.776500e-3 * T**2 - 7.677243e-1 * T + 4.194836e3
+        c2, c1, c0 = self._CP_COEFFS
+        return c2 * T**2 + c1 * T + c0
+
+    def _rho_cp_list(self, T: list[float]) -> tuple[list[float], list[float]]:
+        """
+        ``rho(T)`` and ``cp(T)`` of a list of temperatures, on Python floats.
+
+        Bit-identical to :meth:`rho`/:meth:`cp` applied to a float64 array
+        (NumPy evaluates ``T**2`` of an array as ``T*T``). Used by the solver
+        on small grids, where NumPy's per-call overhead dominates.
+        """
+        r2, r1, r0 = self._RHO_COEFFS
+        c2, c1, c0 = self._CP_COEFFS
+        rho = [r2 * (t * t) + r1 * t + r0 for t in T]
+        cp = [c2 * (t * t) + c1 * t + c0 for t in T]
+        return rho, cp
 
     def lambda_fluid(self, T: float | np.ndarray) -> float | np.ndarray:
         """λ(T) = 3.097195e-8·T³ - 1.565775e-5·T² + 2.517120e-3·T + 5.531103e-1  [W/(m·K)]"""

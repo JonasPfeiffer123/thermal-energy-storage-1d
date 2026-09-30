@@ -234,3 +234,13 @@ def test_convective_adjustment_bitwise(rng, n):
         m = rng.uniform(500.0, 5000.0, n)
         new = convective_adjustment(T.tolist(), m.tolist())
         assert np.array(new).tobytes() == ref_convective_adjustment(T, m).tobytes()
+
+
+def test_water_properties_list_path_bitwise(rng):
+    from thermal_energy_storage_model import WaterProperties
+
+    water = WaterProperties()
+    T = np.concatenate([np.linspace(0.0, 130.0, 13001), rng.uniform(-10.0, 150.0, 20000)])
+    rho, cp = water._rho_cp_list(T.tolist())
+    assert np.array(rho).tobytes() == np.asarray(water.rho(T)).tobytes()
+    assert np.array(cp).tobytes() == np.asarray(water.cp(T)).tobytes()

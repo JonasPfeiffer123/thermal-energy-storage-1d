@@ -18,7 +18,7 @@ from ._kernels import (
 )
 from .config import StorageConfig
 from .diffusors import DiffusorModel, PointDiffusor, UniformDiffusor
-from .fluids import ConstantFluidProperties, FluidProperties
+from .fluids import ConstantFluidProperties, FluidProperties, WaterProperties
 from .geometry import CylinderGeometry, GeometryModel
 from .losses import ConstantAmbientLoss, LossModel
 from .ports import HeatExchangerPort
@@ -28,6 +28,11 @@ from .state import StorageInputs, StorageOutputs, StorageState
 # ---------------------------------------------------------------------------
 # Core model
 # ---------------------------------------------------------------------------
+
+# Largest grid for which WaterProperties are evaluated on Python floats
+# instead of NumPy arrays (measured break-even of the two, ~35-40 nodes).
+_SCALAR_FLUID_MAX_NODES: int = 32
+
 
 class _FluidState:
     """
@@ -394,6 +399,7 @@ class ThermalStorage1D:
 
         # Per-step caches (see _fluid_state / _conduction_coefficients)
         self._fluid_cache: tuple | None = None
+        self._fluid_const_cache: tuple | None = None
         self._K_cond_cache: tuple = (None, [])
 
         # Loss models that keep the base-class advance() are steady-state:
@@ -955,7 +961,11 @@ class ThermalStorage1D:
         evaluated once per temperature profile: the result for the most
         recent float64 profile is kept, so ``get_soc()``/``get_stored_energy()``
         on a new state and the following ``step()`` from it share one
-        evaluation.
+        evaluation, and temperature-independent properties (scalar
+        ``rho``/``cp``, e.g. :class:`ConstantFluidProperties`) are reused as
+        long as their values do not change. :class:`WaterProperties` on grids
+        of up to ``_SCALAR_FLUID_MAX_NODES`` nodes is evaluated on Python
+        floats (bit-identical, see ``WaterProperties._rho_cp_list``).
 
         Parameters
         ----------
@@ -973,13 +983,32 @@ class ThermalStorage1D:
                 return cached[2]
 
         n = self.n
-        rho_T = np.asarray(fluid.rho(T), dtype=float)
-        cp_T = np.asarray(fluid.cp(T), dtype=float)
-        if rho_T.ndim == 0:
-            rho_T = np.full(n, float(rho_T))
-        if cp_T.ndim == 0:
-            cp_T = np.full(n, float(cp_T))
-        state = self._fluid_state_from_arrays(rho_T, cp_T)
+        state: _FluidState
+        if type(fluid) is WaterProperties and n <= _SCALAR_FLUID_MAX_NODES:
+            rho, cp = fluid._rho_cp_list(T.tolist() if T_list is None else T_list)
+            C_list = [(r * V) * c for r, V, c in zip(rho, self._V_nodes_list, cp)]
+            cp_mean = float(np.add.reduce(np.array(cp), axis=None)) / n  # == np.mean
+            state = _FluidState(C_list, cp_mean, rho)
+        else:
+            rho_T = np.asarray(fluid.rho(T), dtype=float)
+            cp_T = np.asarray(fluid.cp(T), dtype=float)
+            if rho_T.ndim == 0 and cp_T.ndim == 0:
+                # Temperature-independent values: the result depends on them only
+                values = (float(rho_T), float(cp_T))
+                const = self._fluid_const_cache
+                if const is not None and const[0] == values and const[1] is fluid:
+                    state = const[2]
+                else:
+                    state = self._fluid_state_from_arrays(
+                        np.full(n, values[0]), np.full(n, values[1])
+                    )
+                    self._fluid_const_cache = (values, fluid, state)
+            else:
+                if rho_T.ndim == 0:
+                    rho_T = np.full(n, float(rho_T))
+                if cp_T.ndim == 0:
+                    cp_T = np.full(n, float(cp_T))
+                state = self._fluid_state_from_arrays(rho_T, cp_T)
 
         if cacheable:
             self._fluid_cache = (key, fluid, state)
