@@ -9,6 +9,7 @@ from typing import cast
 
 import numpy as np
 
+from ._kernels import tvd_correction
 from .config import StorageConfig
 from .diffusors import DiffusorModel, PointDiffusor, UniformDiffusor
 from .fluids import ConstantFluidProperties, FluidProperties
@@ -21,10 +22,6 @@ from .state import StorageInputs, StorageOutputs, StorageState
 # ---------------------------------------------------------------------------
 # Core model
 # ---------------------------------------------------------------------------
-
-# Numerical epsilon to avoid division by zero in the TVD gradient ratio
-# (only active for |ΔT| < 1e-12 K, i.e. practically never)
-_TVD_EPS: float = 1e-12
 
 class ThermalStorage1D:
     """
@@ -1385,43 +1382,27 @@ class ThermalStorage1D:
         -------
         np.ndarray
             Additive TVD heat-flow correction [W], shape (n_nodes,).
+
+        Notes
+        -----
+        With ``F_k`` the interface flow, ``ΔT_k = T[k+1] − T[k]`` and the
+        Courant number ``cfl_k = min(|F_k|·dt / (ρ·A_iface[k]·Δz), 1)``:
+
+            downward (F_k ≥ 0):  r = ΔT_{k-1} / ΔT_k
+                corr = ½·F_k·cp·(1 − cfl_k)·φ(r)·ΔT_k,
+                Q[k] −= corr, Q[k+1] += corr
+            upward (F_k < 0):    r = ΔT_{k+1} / ΔT_k
+                corr = ½·|F_k|·cp·(1 − cfl_k)·φ(r)·(−ΔT_k),
+                Q[k] += corr, Q[k+1] −= corr
+
+        with the van Leer limiter φ (:meth:`_van_leer`), zero upwind gradient
+        at the tank boundaries and ``±1e-12`` K added to the denominator of r.
+        Interfaces with ``|F_k| < 1e-30`` get no correction. The loop runs on
+        Python floats (:func:`._kernels.tvd_correction`).
         """
-        n = self.n
-        cfg = self.config
-        dT = np.diff(T)   # T[k+1] - T[k], shape (N-1,)
-        Q_tvd = np.zeros(n)
-        A_iface = self._A_iface
-
-        for k in range(n - 1):
-            F_k = float(F_int[k])
-            if abs(F_k) < 1e-30:
-                continue
-            dT_k = float(dT[k])
-            cfl_k = min(abs(F_k) * dt / (cfg.rho * float(A_iface[k]) * self.dz), 1.0)
-
-            if F_k >= 0.0:
-                # Downward flow: upwind is node k (top)
-                dT_up = float(dT[k - 1]) if k > 0 else 0.0
-                dT_safe = dT_k + (_TVD_EPS if dT_k >= 0 else -_TVD_EPS)
-                r = dT_up / dT_safe
-                phi = float(self._van_leer(np.array([r]))[0])
-                corr = 0.5 * F_k * cp * (1.0 - cfl_k) * phi * dT_k
-                # Conservative distribution: node k loses, node k+1 gains
-                Q_tvd[k]     -= corr
-                Q_tvd[k + 1] += corr
-            else:
-                # Upward flow: upwind is node k+1 (bottom)
-                dT_flow = -dT_k   # T[k] - T[k+1] = gradient in flow direction
-                dT_up = float(-dT[k + 1]) if k < n - 2 else 0.0
-                dT_flow_safe = dT_flow + (_TVD_EPS if dT_flow >= 0 else -_TVD_EPS)
-                r = dT_up / dT_flow_safe
-                phi = float(self._van_leer(np.array([r]))[0])
-                corr = 0.5 * (-F_k) * cp * (1.0 - cfl_k) * phi * dT_flow
-                # Conservative distribution: node k+1 loses, node k gains
-                Q_tvd[k]     += corr
-                Q_tvd[k + 1] -= corr
-
-        return Q_tvd
+        return np.array(tvd_correction(
+            T.tolist(), F_int.tolist(), cp, dt, self._tvd_denominator,
+        ))
 
     def _compute_conduction(
         self,
