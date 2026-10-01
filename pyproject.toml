@@ -39,6 +39,9 @@ include = ["thermal_energy_storage_model*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 filterwarnings = ["error::RuntimeWarning"]
+markers = [
+    "golden: one-year golden-master regression runs (deselect with -m \"not golden\")",
+]
 
 [tool.ruff]
 target-version = "py310"
