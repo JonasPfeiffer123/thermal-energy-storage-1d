@@ -4,13 +4,21 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Callable
+from itertools import accumulate
 from typing import cast
 
 import numpy as np
 
+from ._kernels import (
+    convective_adjustment,
+    implicit_solve,
+    solve_tdma,
+    tvd_correction,
+    tvd_fluxes,
+)
 from .config import StorageConfig
-from .diffusors import DiffusorModel, PointDiffusor
-from .fluids import ConstantFluidProperties, FluidProperties
+from .diffusors import DiffusorModel, PointDiffusor, UniformDiffusor
+from .fluids import ConstantFluidProperties, FluidProperties, WaterProperties
 from .geometry import CylinderGeometry, GeometryModel
 from .losses import ConstantAmbientLoss, LossModel
 from .ports import HeatExchangerPort
@@ -21,9 +29,42 @@ from .state import StorageInputs, StorageOutputs, StorageState
 # Core model
 # ---------------------------------------------------------------------------
 
-# Numerical epsilon to avoid division by zero in the TVD gradient ratio
-# (only active for |ΔT| < 1e-12 K, i.e. practically never)
-_TVD_EPS: float = 1e-12
+# Largest grid for which WaterProperties are evaluated on Python floats
+# instead of NumPy arrays (measured break-even of the two, ~35-40 nodes).
+_SCALAR_FLUID_MAX_NODES: int = 32
+
+
+class _FluidState:
+    """
+    Fluid properties at one temperature profile (see
+    :meth:`ThermalStorage1D._fluid_state`).
+
+    Attributes
+    ----------
+    C_list : list[float]
+        Node heat capacities ``rho(T)·V·cp(T)`` [J/K].
+    cp_mean : float
+        Mean of cp(T) over the nodes [J/(kg·K)] (as ``np.mean``).
+    rho : list[float] or numpy.ndarray
+        Densities [kg/m³].
+    """
+
+    __slots__ = ("C_list", "_C_array", "cp_mean", "rho")
+
+    def __init__(self, C_list: list[float], cp_mean: float, rho,
+                 C_array: np.ndarray | None = None) -> None:
+        self.C_list = C_list
+        self.cp_mean = cp_mean
+        self.rho = rho
+        self._C_array = C_array
+
+    @property
+    def C_array(self) -> np.ndarray:
+        """Node heat capacities as an array (created on first use)."""
+        if self._C_array is None:
+            self._C_array = np.array(self.C_list)
+        return self._C_array
+
 
 class ThermalStorage1D:
     """
@@ -288,7 +329,9 @@ class ThermalStorage1D:
         # Per-node geometry
         self._A_cross_nodes: np.ndarray = geom.A_cross_nodes(n)
         self._V_nodes: np.ndarray = geom.V_nodes(n)
+        self._V_nodes_list: list[float] = self._V_nodes.tolist()
         self._m_nodes: np.ndarray = cfg.rho * self._V_nodes
+        self._m_nodes_list: list[float] = self._m_nodes.tolist()
         self._C_nodes: np.ndarray = self._m_nodes * cfg.cp
 
         # Representative cross-section for CFL calculation: smallest area
@@ -305,7 +348,15 @@ class ThermalStorage1D:
         #   K_iface[k] = λ_eff · A_iface[k] / dz
         #   A_iface[k] = mean cross-section between node k and k+1
         A_iface = 0.5 * (self._A_cross_nodes[:-1] + self._A_cross_nodes[1:])
+        self._A_iface: np.ndarray = A_iface
+        self._A_iface_list: list[float] = A_iface.tolist()
         self._K_cond_iface: np.ndarray = self._lambda_eff * A_iface / self.dz
+
+        # Per-interface TVD Courant-number denominator ρ · A_iface · Δz [kg],
+        # evaluated in the same operation order as the per-step formula.
+        self._tvd_denominator: list[float] = [
+            cfg.rho * a * self.dz for a in A_iface.tolist()
+        ]
 
         # Backward-compatible scalar quantities (representative of mid node)
         self.m_node: float = float(np.mean(self._m_nodes))
@@ -338,6 +389,24 @@ class ThermalStorage1D:
             self._diffusor: DiffusorModel = cfg.diffusor_model
         else:
             self._diffusor = PointDiffusor()
+
+        # Port height -> (node, weight) pairs of the built-in diffusor models,
+        # whose mapping depends only on the port height (see _port_weights).
+        self._port_weight_cache: dict = {}
+
+        # Total nominal heat capacity [J/K] (E_max in get_soc)
+        self._C_total: float = float(np.sum(self._C_nodes))
+
+        # Per-step caches (see _fluid_state / _conduction_coefficients)
+        self._fluid_cache: tuple | None = None
+        self._fluid_const_cache: tuple | None = None
+        self._K_cond_cache: tuple = (None, [])
+
+        # Loss models that keep the base-class advance() are steady-state:
+        # their wall heat flow does not change when advance() is called.
+        self._loss_model_is_steady: bool = (
+            type(self._loss_model).advance is LossModel.advance
+        )
 
     def _compute_wall_areas(self) -> np.ndarray:
         """
@@ -458,15 +527,9 @@ class ThermalStorage1D:
         For temperature-dependent fluid properties:
         E = Σ_k ρ(T_k) · V_k · cp(T_k) · (T_k − T_ref) is computed.
         """
-        T = state.temperatures
-        rho_T = np.asarray(self._fluid.rho(T), dtype=float)
-        cp_T  = np.asarray(self._fluid.cp(T),  dtype=float)
-        if rho_T.ndim == 0:
-            rho_T = np.full(self.n, float(rho_T))
-        if cp_T.ndim == 0:
-            cp_T = np.full(self.n, float(cp_T))
-        C_nodes = rho_T * self._V_nodes * cp_T
-        return float(np.sum(C_nodes * (T - T_ref)))
+        T = np.asarray(state.temperatures)
+        C_nodes = self._fluid_state(T).C_array
+        return float(np.add.reduce(C_nodes * (T - T_ref), axis=None))  # == np.sum
 
     def get_soc(
         self,
@@ -501,8 +564,9 @@ class ThermalStorage1D:
                 f"T_max ({T_max}) must be greater than T_min ({T_min})."
             )
         E_current = self.get_stored_energy(state, T_ref=T_min)
-        E_max = float(np.sum(self._C_nodes)) * (T_max - T_min)
-        return float(np.clip(E_current / E_max, 0.0, 1.0))
+        E_max = self._C_total * (T_max - T_min)
+        # Same result as float(np.clip(x, 0.0, 1.0)), incl. NaN and -0.0
+        return float(min(max(E_current / E_max, 0.0), 1.0))
 
     def max_stable_dt(self, m_dot_max: float) -> float:
         """
@@ -726,32 +790,25 @@ class ThermalStorage1D:
         n = self.n
 
         # --- Port-based mass flows and source terms ---
-        F    = self._compute_inter_node_fluxes(inputs.ports)
-        S, T_src = self._compute_source_terms(inputs.ports)
+        S_list, F_list, T_src_nodes, port_weights, port_nodes = (
+            self._port_flows(inputs.ports)
+        )
+        T_list = T.tolist()
 
         # --- Temperature-dependent fluid properties for this timestep ---
-        rho_T = np.asarray(self._fluid.rho(T), dtype=float)
-        cp_T  = np.asarray(self._fluid.cp(T),  dtype=float)
-        if rho_T.ndim == 0:
-            rho_T = np.full(n, float(rho_T))
-        if cp_T.ndim == 0:
-            cp_T = np.full(n, float(cp_T))
-
-        # Local heat capacity per node [J/K]
-        C_nodes = rho_T * self._V_nodes * cp_T
+        # Local heat capacity per node [J/K] and representative cp for the
+        # advection term (profile mean); shared with get_stored_energy().
+        fluid = self._fluid_state(T, T_list)
+        cp_mean = fluid.cp_mean
 
         # Thermal conductivity at profile mean; effective coefficients.
         # Note: lambda_fluid is evaluated at the mean profile temperature (approx.),
         # not node-wise. Over a typical 20-90 °C TES operating range the error is
         # usually < 10 %; for strongly temperature-dependent fluids consider
-        # node-wise evaluation. The advection cp below is treated the same way.
-        T_mean = float(T.mean())
+        # node-wise evaluation. The advection cp above is treated the same way.
+        T_mean = float(np.add.reduce(T, axis=None)) / T.size   # == T.mean()
         lambda_eff_T = float(self._fluid.lambda_fluid(T_mean)) * cfg.lambda_eff_factor
-        A_iface = 0.5 * (self._A_cross_nodes[:-1] + self._A_cross_nodes[1:])
-        K_cond_iface_T = lambda_eff_T * A_iface / self.dz
-
-        # Representative cp for advection term (profile mean)
-        cp_mean = float(np.mean(cp_T))
+        K_cond_iface_T = self._conduction_coefficients(lambda_eff_T)
 
         # --- Mass-balance sanity check ---
         # A fixed-volume tank requires sum(port.m_dot) == 0 (incompressibility);
@@ -759,8 +816,9 @@ class ThermalStorage1D:
         # meaningful for this model and causes a silent volume/temperature drift,
         # so warn rather than silently accepting it.
         if inputs.ports:
-            m_dot_sum = sum(p.m_dot for p in inputs.ports)
-            m_dot_max = max(abs(p.m_dot) for p in inputs.ports)
+            m_dots = [p.m_dot for p in inputs.ports]
+            m_dot_sum = sum(m_dots)
+            m_dot_max = max(map(abs, m_dots))
             if m_dot_max > 0.0 and abs(m_dot_sum) / m_dot_max > 1e-6:
                 warnings.warn(
                     f"Port mass flows are not balanced (Σṁ = {m_dot_sum:.4g} kg/s, "
@@ -771,33 +829,41 @@ class ThermalStorage1D:
                     stacklevel=2,
                 )
 
-        # --- CFL check: maximum absolute interface flow ---
-        rho_min = float(rho_T.min())
-        m_for_cfl = float(np.max(np.abs(F)))
-        if cfg.solver == "explicit" and m_for_cfl > 0.0:
-            cfl_val = (m_for_cfl / (rho_min * self.A_cross)) * dt / self.dz
-            if cfl_val > 1.0:
-                warnings.warn(
-                    f"CFL condition violated (CFL = {cfl_val:.2f} > 1). "
-                    f"dt={dt} s, ṁ_max={m_for_cfl:.2f} kg/s. "
-                    "Solution may be numerically unstable.",
-                    RuntimeWarning,
-                    stacklevel=2,
-                )
+        # --- CFL check (explicit solver): maximum absolute interface flow ---
+        if cfg.solver == "explicit":
+            m_for_cfl = max(map(abs, F_list))
+            if m_for_cfl > 0.0:
+                rho_min = float(np.asarray(fluid.rho).min())
+                cfl_val = (m_for_cfl / (rho_min * self.A_cross)) * dt / self.dz
+                if cfl_val > 1.0:
+                    warnings.warn(
+                        f"CFL condition violated (CFL = {cfl_val:.2f} > 1). "
+                        f"dt={dt} s, ṁ_max={m_for_cfl:.2f} kg/s. "
+                        "Solution may be numerically unstable.",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
 
         # --- Port outlet temperatures (from current state) ---
         # For outlet ports this is the mass-flow-weighted node temperature
         # in the diffusor zone (for PointDiffusor: exactly one node).
-        port_temperatures = [
-            float(sum(w * T[k]
-                      for k, w in self._diffusor.node_weights(p, self._z_nodes)))
-            for p in inputs.ports
-        ]
+        # Summed sequentially on purpose: Python >= 3.12 sum() compensates
+        # float rounding, which would change multi-node results.
+        port_temperatures = []
+        for weights in port_weights:
+            T_port = 0.0
+            for k, w in weights:
+                T_port += w * T_list[k]
+            port_temperatures.append(T_port)
 
         # --- Heat-exchanger source terms (epsilon-NTU, explicitly linearized) ---
-        Q_hx_nodes, hx_outlet_temperatures = self._compute_hx_source_terms(
-            T, inputs.hx_ports
-        )
+        # None stands for all-zero terms (no HX port, no headspace).
+        Q_hx_nodes: np.ndarray | None = None
+        hx_outlet_temperatures: list = []
+        if inputs.hx_ports:
+            Q_hx_nodes, hx_outlet_temperatures = self._compute_hx_source_terms(
+                T, inputs.hx_ports
+            )
 
         # --- Headspace heat exchange (if enabled) ---
         T_hs_new = state.T_headspace
@@ -805,21 +871,33 @@ class ThermalStorage1D:
             Q_hs, T_hs_new = self._compute_headspace_exchange(
                 state.T_headspace, T[0], dt
             )
+            if Q_hx_nodes is None:
+                Q_hx_nodes = np.zeros(n)
             Q_hx_nodes[0] += Q_hs   # top node receives headspace heat
+
+        # --- Heat losses at T_old (explicitly linearized) ---
+        Q_loss_nodes = self._compute_losses(T)
 
         if cfg.solver == "implicit":
             # --- Fully implicit Euler step (TDMA), optional deferred TVD ---
-            Q_tvd_explicit = None
+            tvd_flux = None
             if cfg.advection_scheme == "tvd" and n >= 3:
-                F_int = F[1:-1]
-                Q_tvd_explicit = self._compute_tvd_correction_ports(
-                    T, F_int, cp_mean, dt
+                tvd_flux = tvd_fluxes(
+                    T_list, F_list[1:-1], cp_mean, dt, self._tvd_denominator
                 )
             T_new = self._step_implicit(
-                T, dt, F, S, T_src, C_nodes, K_cond_iface_T, cp_mean, Q_hx_nodes,
-                Q_tvd_explicit=Q_tvd_explicit,
+                T_list, dt, F_list, S_list, T_src_nodes, port_nodes,
+                fluid.C_list, K_cond_iface_T, cp_mean,
+                self._node_list(Q_loss_nodes),
+                None if Q_hx_nodes is None else Q_hx_nodes.tolist(),
+                tvd_flux,
             )
         else:
+            F = np.array(F_list)
+            S = np.array(S_list)
+            T_src = self._dense_T_src(T_src_nodes)
+            C_nodes = fluid.C_array
+
             # --- Compute temperature-rate terms ---
             dT_dt = np.zeros(n)
 
@@ -829,27 +907,34 @@ class ThermalStorage1D:
             ) / C_nodes
 
             # 2) Conductive heat transport
-            dT_dt += self._compute_conduction(T, K_cond_iface=K_cond_iface_T) / C_nodes
+            dT_dt += self._compute_conduction(
+                T, K_cond_iface=np.array(K_cond_iface_T)
+            ) / C_nodes
 
             # 3) Heat losses to ambient
-            dT_dt += self._compute_losses(T) / C_nodes
+            dT_dt += Q_loss_nodes / C_nodes
 
             # 4) Heat exchangers (epsilon-NTU, explicit)
-            dT_dt += Q_hx_nodes / C_nodes
+            if Q_hx_nodes is not None:
+                dT_dt += Q_hx_nodes / C_nodes
 
             # --- Explicit Euler integration ---
-            T_new = T + dt * dT_dt
+            T_new = (T + dt * dT_dt).tolist()
 
         # --- Buoyancy correction: convective adjustment ---
         if self.config.buoyancy:
-            T_new = self._convective_adjustment(T_new, self._m_nodes)
+            T_new = convective_adjustment(T_new, self._m_nodes_list)
 
         # --- Update transient state of loss model ---
         self._loss_model.advance(T, self.A_wall, self._z_nodes, dt)
 
-        Q_loss = float(-np.sum(self._compute_losses(T)))
+        # Reported loss: evaluated after advance(), which only changes the
+        # result for models with internal state (advance() overridden).
+        if not self._loss_model_is_steady:
+            Q_loss_nodes = self._compute_losses(T)
+        Q_loss = float(-np.add.reduce(Q_loss_nodes, axis=None))   # == -np.sum()
         new_state = StorageState(
-            temperatures=T_new,
+            temperatures=np.fromiter(T_new, dtype=float, count=n),
             time=state.time + dt,
             T_headspace=T_hs_new,
         )
@@ -862,23 +947,120 @@ class ThermalStorage1D:
             T_headspace=T_hs_new,
         )
 
+    def _fluid_state(
+        self,
+        T: np.ndarray,
+        T_list: list[float] | None = None,
+    ) -> _FluidState:
+        """
+        Fluid properties at the temperature profile ``T``.
+
+        Node heat capacities ``rho(T)·V·cp(T)``, the profile-mean cp and the
+        densities, computed as in the array formulation
+        (``C = rho_T * V * cp_T``, ``np.mean(cp_T)``). The fluid model is
+        evaluated once per temperature profile: the result for the most
+        recent float64 profile is kept, so ``get_soc()``/``get_stored_energy()``
+        on a new state and the following ``step()`` from it share one
+        evaluation, and temperature-independent properties (scalar
+        ``rho``/``cp``, e.g. :class:`ConstantFluidProperties`) are reused as
+        long as their values do not change. :class:`WaterProperties` on grids
+        of up to ``_SCALAR_FLUID_MAX_NODES`` nodes is evaluated on Python
+        floats (bit-identical, see ``WaterProperties._rho_cp_list``).
+
+        Parameters
+        ----------
+        T : numpy.ndarray
+            Node temperatures [°C].
+        T_list : list[float], optional
+            ``T.tolist()``, if already available.
+        """
+        fluid = self._fluid
+        cacheable = T.dtype == np.float64
+        if cacheable:
+            key = T.tobytes()
+            cached = self._fluid_cache
+            if cached is not None and cached[0] == key and cached[1] is fluid:
+                return cached[2]
+
+        n = self.n
+        state: _FluidState
+        if type(fluid) is WaterProperties and n <= _SCALAR_FLUID_MAX_NODES:
+            rho, cp = fluid._rho_cp_list(T.tolist() if T_list is None else T_list)
+            C_list = [(r * V) * c for r, V, c in zip(rho, self._V_nodes_list, cp)]
+            cp_mean = float(np.add.reduce(np.array(cp), axis=None)) / n  # == np.mean
+            state = _FluidState(C_list, cp_mean, rho)
+        else:
+            rho_T = np.asarray(fluid.rho(T), dtype=float)
+            cp_T = np.asarray(fluid.cp(T), dtype=float)
+            if rho_T.ndim == 0 and cp_T.ndim == 0:
+                # Temperature-independent values: the result depends on them only
+                values = (float(rho_T), float(cp_T))
+                const = self._fluid_const_cache
+                if const is not None and const[0] == values and const[1] is fluid:
+                    state = const[2]
+                else:
+                    state = self._fluid_state_from_arrays(
+                        np.full(n, values[0]), np.full(n, values[1])
+                    )
+                    self._fluid_const_cache = (values, fluid, state)
+            else:
+                if rho_T.ndim == 0:
+                    rho_T = np.full(n, float(rho_T))
+                if cp_T.ndim == 0:
+                    cp_T = np.full(n, float(cp_T))
+                state = self._fluid_state_from_arrays(rho_T, cp_T)
+
+        if cacheable:
+            self._fluid_cache = (key, fluid, state)
+        return state
+
+    def _fluid_state_from_arrays(
+        self, rho_T: np.ndarray, cp_T: np.ndarray,
+    ) -> _FluidState:
+        """:class:`_FluidState` from density and cp arrays."""
+        C_nodes = rho_T * self._V_nodes * cp_T
+        cp_mean = float(np.add.reduce(cp_T, axis=None)) / cp_T.size  # == np.mean
+        return _FluidState(C_nodes.tolist(), cp_mean, rho_T, C_nodes)
+
+    def _conduction_coefficients(self, lambda_eff: float) -> list[float]:
+        """
+        Conductances ``λ_eff · A_iface / Δz`` [W/K] of the internal interfaces.
+
+        Reused while ``λ_eff`` does not change (constant fluid properties).
+        """
+        if lambda_eff != self._K_cond_cache[0]:
+            dz = self.dz
+            self._K_cond_cache = (
+                lambda_eff, [lambda_eff * A / dz for A in self._A_iface_list],
+            )
+        return self._K_cond_cache[1]
+
+    def _node_list(self, values) -> list[float]:
+        """Per-node values (array-like, broadcastable to n) as a list."""
+        arr = np.asarray(values)
+        if arr.shape != (self.n,):
+            arr = np.broadcast_to(arr, (self.n,))
+        return arr.tolist()
+
     # ------------------------------------------------------------------
     # Implicit solver (TDMA)
     # ------------------------------------------------------------------
 
     def _step_implicit(
         self,
-        T: np.ndarray,
+        T: list[float],
         dt: float,
-        F: np.ndarray,
-        S: np.ndarray,
-        T_src: np.ndarray,
-        C_nodes: np.ndarray,
-        K_cond_iface: np.ndarray,
+        F: list[float],
+        S: list[float],
+        T_src: dict[int, float],
+        port_nodes: list[int],
+        C_nodes: list[float],
+        K_cond_iface: list[float],
         cp: float,
-        Q_hx_nodes: np.ndarray | None = None,
-        Q_tvd_explicit: np.ndarray | None = None,
-    ) -> np.ndarray:
+        Q_loss_nodes: list[float],
+        Q_hx_nodes: list[float] | None = None,
+        tvd_flux: list[float] | None = None,
+    ) -> list[float]:
         """
         Fully implicit Euler step with upwind advection (TDMA), optional
         deferred TVD anti-diffusion correction.
@@ -895,103 +1077,77 @@ class ThermalStorage1D:
         Thomas algorithm (TDMA) in O(N).
 
         TVD correction is applied as a **deferred explicit source term**
-        (`Q_tvd_explicit`) added to the right-hand side. Computed by the caller
-        from T_old via :meth:`_compute_tvd_correction_ports`, it carries the
+        added to the right-hand side. Computed by the caller from T_old
+        (interface fluxes ``tvd_flux``, see :meth:`_compute_tvd_correction_ports`
+        for the scheme and :func:`._kernels.tvd_fluxes`), it carries the
         usual `(1 − CFL)` weighting — so when the user picks a timestep so
         large that CFL ≥ 1 at all faces, the correction vanishes and the
         scheme degenerates to pure implicit upwind (unconditionally stable).
         At moderate CFL the correction reduces the upwind smearing of
         thermocline fronts.
 
+        All vectors are lists of Python floats (see :mod:`._kernels` for
+        why); assembly and solution run in :func:`._kernels.implicit_solve`,
+        which accumulates the coefficients in the order of the former array
+        formulation, so the result is bit-identical to it.
+
         Parameters
         ----------
-        T : np.ndarray
-            Temperature profile at current time [°C], shape (n,).
+        T : list[float]
+            Temperature profile at current time [°C], length n.
         dt : float
             Timestep size [s].
-        F : np.ndarray
-            Inter-node flow vector [kg/s], shape (n+1). F[0]=F[n]=0.
-        S : np.ndarray
-            Net source term per node [kg/s], shape (n,).
-        T_src : np.ndarray
-            Mass-flow-weighted inlet temperature per node [°C], shape (n,).
-        C_nodes : np.ndarray
-            Thermal node capacity [J/K], shape (n,).
-        K_cond_iface : np.ndarray
+        F : list[float]
+            Inter-node flow vector [kg/s], length n+1 (see
+            :meth:`_port_flows`); only the internal faces F[1..n-1] are used.
+        S : list[float]
+            Net source term per node [kg/s], length n.
+        T_src : dict[int, float]
+            Mass-flow-weighted inlet temperature of the nodes with inflow [°C].
+        port_nodes : list[int]
+            Nodes connected to a port (``S`` is zero elsewhere).
+        C_nodes : list[float]
+            Thermal node capacity [J/K], length n.
+        K_cond_iface : list[float]
             Conduction coefficient at each internal interface [W/K],
-            shape (n-1,). K_cond_iface[k] lies between nodes k and k+1.
+            length n-1. K_cond_iface[k] lies between nodes k and k+1.
         cp : float
             Representative cp value for advection term [J/(kg·K)].
-        Q_hx_nodes : np.ndarray, optional
-            Heat-exchanger source terms per node [W], shape (n). Added to
-            right-hand side (explicitly linearized). Default: None (= 0).
-        Q_tvd_explicit : np.ndarray, optional
-            Deferred TVD anti-diffusion correction per node [W], shape (n).
-            Caller computes it from T_old (matching the explicit-path
-            convention) and passes it in when ``advection_scheme == "tvd"``.
+        Q_loss_nodes : list[float]
+            Wall heat flow per node at T_old [W] (loss model), added to the
+            right-hand side (explicitly linearized).
+        Q_hx_nodes : list[float], optional
+            Heat-exchanger/headspace source terms per node [W], length n.
+            Added to right-hand side (explicitly linearized). Default: None (= 0).
+        tvd_flux : list[float], optional
+            Deferred TVD anti-diffusive heat flux across each internal
+            interface [W], length n-1, positive downward. Caller computes it
+            from T_old (matching the explicit-path convention) and passes it
+            in when ``advection_scheme == "tvd"``.
             Default: None (= 0, pure implicit upwind).
+
+        Returns
+        -------
+        list[float]
+            Temperature profile at t+dt [°C], length n.
         """
-        n = self.n
-        K = K_cond_iface        # (n-1,)
-        C_dt = C_nodes / dt     # thermal capacity / dt [W/K]
-
         # Diagonals: d[i]*T_new[i] + a[i]*T_new[i-1] + c[i]*T_new[i+1] = b[i]
-        a = np.zeros(n)         # lower off-diagonal (coeff. of T_new[i-1])
-        d = np.zeros(n)         # main diagonal
-        c = np.zeros(n)         # upper off-diagonal (coeff. of T_new[i+1])
-        b = np.zeros(n)
-
-        # --- Base term: time derivative ---
-        d += C_dt
-        b += C_dt * T
-
-        # --- Heat losses (explicitly linearized -> RHS) ---
-        b += self._compute_losses(T)
-
-        # --- Heat exchangers (explicitly linearized -> RHS) ---
-        if Q_hx_nodes is not None:
-            b += Q_hx_nodes
-
-        # --- Deferred TVD anti-diffusion (explicit, -> RHS) ---
-        # Conservatively distributed in _compute_tvd_correction_ports so
-        # sum(Q_tvd) = 0 by construction → energy-conserving correction.
-        if Q_tvd_explicit is not None:
-            b += Q_tvd_explicit
-
-        # --- Conduction (implicit) ---
-        # Interface k (between nodes k and k+1), k = 0..n-2:
-        #   Node k:     d[k]   += K[k],  c[k]   -= K[k]
-        #   Node k+1:   d[k+1] += K[k],  a[k+1] -= K[k]
-        d[:-1]  += K
-        c[:-1]  -= K
-        d[1:]   += K
-        a[1:]   -= K
-
-        # --- Advection (implicit, upwind) ---
-        # Interface j (between nodes j-1 and j), j = 1..n-1,
-        # corresponds to index k = j-1 in F[k+1]:
-        #   F_val > 0 (downward): upwind = T_new[k]
-        #     -> d[k]   += F_val*cp   (node k: heat leaves downward)
-        #        a[k+1] -= F_val*cp   (node k+1: receives heat from T_new[k])
-        #   F_val < 0 (upward): upwind = T_new[k+1]
-        #     -> c[k]   += F_val*cp   (node k: receives heat from T_new[k+1]; F_val<0 -> c[k] decreases)
-        #        d[k+1] -= F_val*cp   (node k+1: heat leaves upward; F_val<0 -> d[k+1] increases)
-        for k in range(n - 1):
-            F_val = float(F[k + 1]) * cp
-            if F_val >= 0.0:
-                d[k]     += F_val
-                a[k + 1] -= F_val
-            else:
-                c[k]     += F_val
-                d[k + 1] -= F_val
-
-        # --- Port source-term energy (semi-implicit) ---
-        # Inlet (m_dot > 0): known inlet temperature -> RHS
-        # Outlet (m_dot < 0): outlet with current node temperature -> implicit
-        d -= cp * np.minimum(S, 0.0)             # outlet: implicit
-        b += cp * np.maximum(S, 0.0) * T_src     # inlet: RHS
-
-        return self._solve_tdma(a, d, c, b)
+        #
+        #   time derivative   d += C/dt,               b += C/dt · T_old
+        #   heat losses/HX    b += Q_loss + Q_hx       (explicitly linearized)
+        #   deferred TVD      b += Q_tvd               (conservative -> energy-
+        #                                              neutral correction)
+        #   conduction        interface k (nodes k, k+1):
+        #                     d[k] += K, c[k] -= K, d[k+1] += K, a[k+1] -= K
+        #   advection         interface k, F_val = F[k+1]·cp, implicit upwind:
+        #                     downward (>= 0): d[k] += F_val, a[k+1] -= F_val
+        #                     upward   (< 0):  c[k] += F_val, d[k+1] -= F_val
+        #   ports             inlet  (S > 0): b += cp·S·T_src (known inlet T)
+        #                     outlet (S < 0): d -= cp·S (leaves at T_new)
+        return implicit_solve(
+            T, dt, F[1:-1], S, T_src, port_nodes, C_nodes, K_cond_iface, cp,
+            Q_loss_nodes, Q_hx_nodes, tvd_flux,
+        )
 
     @staticmethod
     def _solve_tdma(
@@ -1004,7 +1160,8 @@ class ThermalStorage1D:
         Solve a tridiagonal linear system A·x = b (Thomas algorithm).
 
         Runtime O(N), low memory overhead, numerically stable for
-        diagonally dominant systems.
+        diagonally dominant systems. Wrapper around
+        :func:`._kernels.solve_tdma`.
 
         Parameters
         ----------
@@ -1024,23 +1181,9 @@ class ThermalStorage1D:
         np.ndarray
             Solution vector x.
         """
-        n = len(d)
-        d_ = d.copy()
-        b_ = b.copy()
-
-        # Forward elimination
-        for i in range(1, n):
-            w = a[i] / d_[i - 1]
-            d_[i] -= w * c[i - 1]
-            b_[i] -= w * b_[i - 1]
-
-        # Back substitution
-        x = np.empty(n)
-        x[-1] = b_[-1] / d_[-1]
-        for i in range(n - 2, -1, -1):
-            x[i] = (b_[i] - c[i] * x[i + 1]) / d_[i]
-
-        return x
+        return np.array(solve_tdma(
+            *(np.asarray(v, dtype=float).tolist() for v in (a, d, c, b))
+        ))
 
     # ------------------------------------------------------------------
     # Private helper methods for heat-transport terms
@@ -1082,7 +1225,8 @@ class ThermalStorage1D:
             Write back averaged temperatures for each zone.
 
         The method is exactly energy-conserving and O(N), because each node
-        is pushed to the stack at most once and popped at most once.
+        is pushed to the stack at most once and popped at most once. It runs
+        on Python floats (:func:`._kernels.convective_adjustment`).
 
         Parameters
         ----------
@@ -1098,33 +1242,101 @@ class ThermalStorage1D:
         np.ndarray
             Corrected temperature profile, stable everywhere (T[i] ≥ T[i+1]).
         """
-        n = len(T)
-        # Stack: each item = [m*T_sum, mass_sum, start_index]
-        # Process from index 0 (top) to N-1 (bottom).
-        blocks: list = []   # [T_wm, m_sum, start_idx]
-        for i in range(n):
-            T_wm = float(T[i] * m_nodes[i])
-            m_sum = float(m_nodes[i])
-            start = i
-            # While last zone is colder than current one: merge
-            while blocks and blocks[-1][0] / blocks[-1][1] < T_wm / m_sum:
-                prev = blocks.pop()
-                T_wm  += prev[0]
-                m_sum += prev[1]
-                start  = prev[2]
-            blocks.append([T_wm, m_sum, start])
-
-        # Write back results
-        result = T.copy()
-        for k in range(len(blocks)):
-            T_mix = blocks[k][0] / blocks[k][1]
-            end   = blocks[k + 1][2] if k + 1 < len(blocks) else n
-            result[blocks[k][2]:end] = T_mix
-        return result
+        return np.array(convective_adjustment(
+            np.asarray(T, dtype=float).tolist(),
+            np.asarray(m_nodes, dtype=float).tolist(),
+        ))
 
     # ------------------------------------------------------------------
     # Port helper methods
     # ------------------------------------------------------------------
+
+    def _port_weights(self, port) -> list[tuple[int, float]]:
+        """
+        ``(node_index, weight)`` pairs of one port (see :class:`DiffusorModel`).
+
+        The built-in :class:`PointDiffusor` and :class:`UniformDiffusor`
+        map a port by its height alone, so their result is cached per
+        height (and zone width); any other diffusor model is queried on
+        every call, since it may depend on further port attributes.
+        """
+        diffusor = self._diffusor
+        cls = type(diffusor)
+        if cls is PointDiffusor:
+            key: object = port.z
+        elif cls is UniformDiffusor:
+            key = (port.z, cast(UniformDiffusor, diffusor).H_zone)
+        else:
+            return diffusor.node_weights(port, self._z_nodes)
+        cache = self._port_weight_cache
+        weights = cache.get(key)
+        if weights is None:
+            if len(cache) >= 256:   # bound memory for continuously varying z
+                cache.clear()
+            weights = cache[key] = diffusor.node_weights(port, self._z_nodes)
+        return weights
+
+    def _port_flows(self, ports: list) -> tuple:
+        """
+        Port mass flows mapped to the grid, as Python floats.
+
+        Single pass over all ports that yields everything the solver needs
+        per step; the arithmetic (and its order) is that of
+        :meth:`_compute_source_terms` and :meth:`_compute_inter_node_fluxes`,
+        so the values are bit-identical to theirs.
+
+        Returns
+        -------
+        S : list[float]
+            Net source term per node [kg/s], length n.
+        F : list[float]
+            Inter-node flow [kg/s], length n+1, ``F[0] = 0``,
+            ``F[j] = S[0] + ... + S[j-1]`` (summed sequentially like
+            ``np.cumsum``).
+        T_src : dict[int, float]
+            Mass-flow-weighted inlet temperature [°C] of every node with
+            inflow; nodes without inflow are absent (value 0).
+        weights : list[list[tuple[int, float]]]
+            ``(node, weight)`` pairs of each port, in port order.
+        nodes : list[int]
+            Nodes connected to at least one port (each once); ``S`` is zero
+            at all other nodes.
+        """
+        S = [0.0] * self.n
+        S_pos: dict[int, float] = {}
+        T_src_weighted: dict[int, float] = {}
+        weights = []
+        nodes: dict[int, None] = {}
+        for port in ports:
+            port_weights = self._port_weights(port)
+            weights.append(port_weights)
+            m_dot = port.m_dot
+            for k, w in port_weights:
+                nodes[k] = None
+                # Products keep the operand types' semantics (e.g. float32
+                # inputs); float() mirrors adding them into a float64 array.
+                m_part = m_dot * w
+                m_part_f = float(m_part)
+                S[k] += m_part_f
+                if m_part > 0.0:
+                    S_pos[k] = S_pos.get(k, 0.0) + m_part_f
+                    T_src_weighted[k] = (
+                        T_src_weighted.get(k, 0.0) + float(m_part * port.T_in)
+                    )
+        T_src = {
+            k: T_src_weighted[k] / max(s_pos, 1e-30)
+            for k, s_pos in S_pos.items()
+            if s_pos > 0.0
+        }
+        F = [0.0, *accumulate(S)]
+        return S, F, T_src, weights, list(nodes)
+
+    def _dense_T_src(self, T_src: dict) -> np.ndarray:
+        """Inlet temperatures from :meth:`_port_flows` as a length-n array."""
+        arr = np.zeros(self.n)
+        for k, value in T_src.items():
+            arr[k] = value
+        return arr
 
     def _compute_inter_node_fluxes(self, ports: list) -> np.ndarray:
         """
@@ -1148,14 +1360,7 @@ class ThermalStorage1D:
         np.ndarray
             Flow vector, shape (n_nodes + 1,).
         """
-        n = self.n
-        S = np.zeros(n)
-        for port in ports:
-            for k, w in self._diffusor.node_weights(port, self._z_nodes):
-                S[k] += port.m_dot * w
-        F = np.zeros(n + 1)
-        F[1:] = np.cumsum(S)
-        return F
+        return np.array(self._port_flows(ports)[1])
 
     def _compute_source_terms(self, ports: list) -> tuple:
         """
@@ -1176,24 +1381,8 @@ class ThermalStorage1D:
             Mass-flow-weighted inlet temperature per node [°C],
             shape (n_nodes,). Relevant only for nodes with active inlet.
         """
-        n = self.n
-        S = np.zeros(n)
-        S_pos = np.zeros(n)        # Sum of positive inlets per node
-        T_src_weighted = np.zeros(n)
-        for port in ports:
-            for k, w in self._diffusor.node_weights(port, self._z_nodes):
-                m_part = port.m_dot * w
-                S[k] += m_part
-                if m_part > 0.0:
-                    S_pos[k] += m_part
-                    T_src_weighted[k] += m_part * port.T_in
-        # Mass-flow-weighted mean; 0 where no inlet exists
-        T_src = np.where(
-            S_pos > 0.0,
-            T_src_weighted / np.maximum(S_pos, 1e-30),
-            0.0,
-        )
-        return S, T_src
+        S, _, T_src, _, _ = self._port_flows(ports)
+        return np.array(S), self._dense_T_src(T_src)
 
     def _compute_advection_ports(
         self,
@@ -1306,43 +1495,27 @@ class ThermalStorage1D:
         -------
         np.ndarray
             Additive TVD heat-flow correction [W], shape (n_nodes,).
+
+        Notes
+        -----
+        With ``F_k`` the interface flow, ``ΔT_k = T[k+1] − T[k]`` and the
+        Courant number ``cfl_k = min(|F_k|·dt / (ρ·A_iface[k]·Δz), 1)``:
+
+            downward (F_k ≥ 0):  r = ΔT_{k-1} / ΔT_k
+                corr = ½·F_k·cp·(1 − cfl_k)·φ(r)·ΔT_k,
+                Q[k] −= corr, Q[k+1] += corr
+            upward (F_k < 0):    r = ΔT_{k+1} / ΔT_k
+                corr = ½·|F_k|·cp·(1 − cfl_k)·φ(r)·(−ΔT_k),
+                Q[k] += corr, Q[k+1] −= corr
+
+        with the van Leer limiter φ (:meth:`_van_leer`), zero upwind gradient
+        at the tank boundaries and ``±1e-12`` K added to the denominator of r.
+        Interfaces with ``|F_k| < 1e-30`` get no correction. The loop runs on
+        Python floats (:func:`._kernels.tvd_correction`).
         """
-        n = self.n
-        cfg = self.config
-        dT = np.diff(T)   # T[k+1] - T[k], shape (N-1,)
-        Q_tvd = np.zeros(n)
-        A_iface = 0.5 * (self._A_cross_nodes[:-1] + self._A_cross_nodes[1:])
-
-        for k in range(n - 1):
-            F_k = float(F_int[k])
-            if abs(F_k) < 1e-30:
-                continue
-            dT_k = float(dT[k])
-            cfl_k = min(abs(F_k) * dt / (cfg.rho * float(A_iface[k]) * self.dz), 1.0)
-
-            if F_k >= 0.0:
-                # Downward flow: upwind is node k (top)
-                dT_up = float(dT[k - 1]) if k > 0 else 0.0
-                dT_safe = dT_k + (_TVD_EPS if dT_k >= 0 else -_TVD_EPS)
-                r = dT_up / dT_safe
-                phi = float(self._van_leer(np.array([r]))[0])
-                corr = 0.5 * F_k * cp * (1.0 - cfl_k) * phi * dT_k
-                # Conservative distribution: node k loses, node k+1 gains
-                Q_tvd[k]     -= corr
-                Q_tvd[k + 1] += corr
-            else:
-                # Upward flow: upwind is node k+1 (bottom)
-                dT_flow = -dT_k   # T[k] - T[k+1] = gradient in flow direction
-                dT_up = float(-dT[k + 1]) if k < n - 2 else 0.0
-                dT_flow_safe = dT_flow + (_TVD_EPS if dT_flow >= 0 else -_TVD_EPS)
-                r = dT_up / dT_flow_safe
-                phi = float(self._van_leer(np.array([r]))[0])
-                corr = 0.5 * (-F_k) * cp * (1.0 - cfl_k) * phi * dT_flow
-                # Conservative distribution: node k+1 loses, node k gains
-                Q_tvd[k]     += corr
-                Q_tvd[k + 1] -= corr
-
-        return Q_tvd
+        return np.array(tvd_correction(
+            T.tolist(), F_int.tolist(), cp, dt, self._tvd_denominator,
+        ))
 
     def _compute_conduction(
         self,
