@@ -10,7 +10,8 @@ StorageInputs.two_port).
 
 Scenario
 --------
-    Cylinder, 100 m³, 10 m high, ConstantAmbientLoss.
+    Cylinder, 100 m³, 10 m high, ConstantAmbientLoss (``--loss`` selects
+    SplitAmbientLoss or TransientGroundLoss instead).
     Daily cycle: 0-7 h charging (85 °C), 8-11 h idle,
     12-19 h discharging (45 °C return), 20-23 h idle.
     Charge/discharge flow exchanges the tank volume in 8 h.
@@ -28,6 +29,7 @@ Usage
 -----
     python benchmark/benchmark_step_performance.py
     python benchmark/benchmark_step_performance.py --nodes 5 20 50 --repeats 7
+    python benchmark/benchmark_step_performance.py --loss transient
     python benchmark/benchmark_step_performance.py --json results.json
 """
 
@@ -48,9 +50,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from thermal_energy_storage_model import (
     ConstantAmbientLoss,
     CylinderGeometry,
+    SplitAmbientLoss,
     StorageConfig,
     StorageInputs,
     ThermalStorage1D,
+    TransientGroundLoss,
     WaterProperties,
     __version__,
 )
@@ -61,7 +65,17 @@ VOLUME = 100.0
 HEIGHT = 10.0
 
 
-def build_storage(n_nodes: int) -> ThermalStorage1D:
+LOSS_MODELS = {
+    "constant": lambda: ConstantAmbientLoss(U_loss=0.3, T_ambient=10.0),
+    "split": lambda: SplitAmbientLoss(U_lid=0.15, U_wall=0.3, T_ambient=10.0),
+    "transient": lambda: TransientGroundLoss(
+        U_lid=0.15, T_ambient_lid=10.0, lambda_soil=2.0, rho_soil=1800.0,
+        cp_soil=900.0, d_total=5.0, n_layers=4, T_far=10.0,
+    ),
+}
+
+
+def build_storage(n_nodes: int, loss: str = "constant") -> ThermalStorage1D:
     geom = CylinderGeometry.from_volume(VOLUME, HEIGHT)
     config = StorageConfig(
         volume=VOLUME,
@@ -69,7 +83,7 @@ def build_storage(n_nodes: int) -> ThermalStorage1D:
         n_nodes=n_nodes,
         geometry=geom,
         fluid=WaterProperties(),
-        loss_model=ConstantAmbientLoss(U_loss=0.3, T_ambient=10.0),
+        loss_model=LOSS_MODELS[loss](),   # fresh state per storage
         solver="implicit",
         advection_scheme="tvd",
         buoyancy=True,
@@ -94,9 +108,10 @@ def build_inputs() -> list[StorageInputs]:
     return inputs
 
 
-def time_year(n_nodes: int, inputs: list[StorageInputs], reads: bool) -> float:
+def time_year(n_nodes: int, inputs: list[StorageInputs], reads: bool,
+              loss: str = "constant") -> float:
     """Seconds per step for one simulated year on a fresh storage."""
-    storage = build_storage(n_nodes)
+    storage = build_storage(n_nodes, loss)
     state = storage.initialize(T_init=np.linspace(70.0, 45.0, n_nodes))
     step = storage.step
     if reads:
@@ -120,23 +135,25 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="step() wall-clock benchmark")
     p.add_argument("--nodes", type=int, nargs="+", default=[5, 10, 20, 50])
     p.add_argument("--repeats", type=int, default=5)
+    p.add_argument("--loss", choices=sorted(LOSS_MODELS), default="constant")
     p.add_argument("--json", default=None, help="write results to this file")
     a = p.parse_args(argv)
 
     inputs = build_inputs()
     # Warm-up (imports, caches, CPU frequency ramp-up).
-    time_year(a.nodes[0], inputs[:500], reads=False)
+    time_year(a.nodes[0], inputs[:500], reads=False, loss=a.loss)
 
     print(f"thermal-energy-storage-1d {__version__} | Python "
           f"{platform.python_version()} | numpy {np.__version__} | "
-          f"{platform.system()} {platform.machine()}")
+          f"{platform.system()} {platform.machine()} | loss: {a.loss}")
     print(f"{'nodes':>5} | {'step min':>9} {'median':>9} | "
           f"{'step+reads min':>14} {'median':>9}   [us per step]")
     results = []
     for n in a.nodes:
         row: dict[str, float | int] = {"n_nodes": n}
         for label, reads in (("step", False), ("step_reads", True)):
-            ts = [time_year(n, inputs, reads) * 1e6 for _ in range(a.repeats)]
+            ts = [time_year(n, inputs, reads, a.loss) * 1e6
+                  for _ in range(a.repeats)]
             row[f"{label}_min_us"] = min(ts)
             row[f"{label}_median_us"] = statistics.median(ts)
         results.append(row)
@@ -150,6 +167,7 @@ def main(argv: list[str] | None = None) -> int:
             "numpy": np.__version__,
             "platform": f"{platform.system()} {platform.machine()}",
             "repeats": a.repeats,
+            "loss": a.loss,
             "results": results,
         }, indent=2))
     return 0

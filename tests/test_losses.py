@@ -253,3 +253,81 @@ def test_loss_model_reprs_do_not_raise():
     for model in models:
         text = repr(model)
         assert type(model).__name__ in text
+
+
+# ---------------------------------------------------------------------------
+# Bit-identity with the former array code
+# ---------------------------------------------------------------------------
+# Reference implementations: the loss-model methods of v1.1.0, before the
+# per-step cost of SplitAmbientLoss and TransientGroundLoss was reduced.
+
+def ref_split_Q_loss_nodes(loss, T_nodes, A_wall_nodes):
+    dT = loss.T_ambient - T_nodes
+    U_nodes = np.full(len(T_nodes), loss.U_wall)
+    U_nodes[0] = loss.U_lid
+    Q = U_nodes * A_wall_nodes * dT
+    Q[0] = loss.U_lid * A_wall_nodes[0] * (loss.T_ambient_lid - T_nodes[0])
+    return Q
+
+
+def ref_transient_Q_loss_nodes(loss, Tg, T_nodes, A_wall_nodes):
+    n = len(T_nodes)
+    Q = np.empty(n)
+    Q[0] = loss.U_lid * A_wall_nodes[0] * (loss.T_ambient_lid - T_nodes[0])
+    Q[1:] = A_wall_nodes[1:] * (Tg[1:, 0] - T_nodes[1:]) / loss._R
+    return Q
+
+
+def ref_transient_advance(loss, Tg, T_nodes, dt):
+    n = len(T_nodes)
+    R = loss._R
+    C = loss._C
+    dT = np.empty_like(Tg)
+    for j in range(loss.n_layers):
+        T_left = T_nodes if j == 0 else Tg[:, j - 1]
+        T_right = np.full(n, loss.T_far) if j == loss.n_layers - 1 else Tg[:, j + 1]
+        dT[:, j] = (dt / C) * ((T_left - Tg[:, j]) / R - (Tg[:, j] - T_right) / R)
+    dT[0, :] = 0.0
+    Tg += dT
+
+
+RNG_SEED = 20261008
+
+
+@pytest.mark.parametrize("n_nodes", [1, 2, 5, 20, 50])
+def test_split_ambient_loss_matches_reference_bitwise(n_nodes):
+    rng = np.random.default_rng(RNG_SEED + n_nodes)
+    loss = SplitAmbientLoss(U_lid=0.151, U_wall=0.3, T_ambient=8.0,
+                            T_ambient_lid=-3.5)
+    z = np.linspace(9.5, 0.5, n_nodes)
+    for _ in range(50):
+        T_nodes = rng.uniform(5.0, 95.0, n_nodes)
+        A_wall = rng.uniform(1.0, 2000.0, n_nodes)
+        loss.T_ambient = float(rng.uniform(-10.0, 30.0))
+        Q = loss.Q_loss_nodes(T_nodes, A_wall, z)
+        assert Q.tobytes() == ref_split_Q_loss_nodes(loss, T_nodes, A_wall).tobytes()
+
+
+@pytest.mark.parametrize("n_layers", [1, 2, 4, 7])
+@pytest.mark.parametrize("n_nodes", [1, 2, 5, 20, 50])
+def test_transient_ground_loss_matches_reference_bitwise(n_nodes, n_layers):
+    """advance() and Q_loss_nodes() over a long, varying trajectory."""
+    rng = np.random.default_rng(RNG_SEED + 100 * n_layers + n_nodes)
+    loss = TransientGroundLoss(
+        U_lid=0.151, T_ambient_lid=8.0, lambda_soil=2.23, rho_soil=2000.0,
+        cp_soil=800.0, d_total=7.5, n_layers=n_layers, T_far=8.0, T_init=11.0,
+    )
+    Tg_ref = np.full((n_nodes, n_layers), 11.0)
+    z = np.linspace(9.5, 0.5, n_nodes)
+    A_wall = rng.uniform(1.0, 2000.0, n_nodes)
+    for _ in range(300):
+        T_nodes = rng.uniform(5.0, 95.0, n_nodes)
+        loss.T_ambient_lid = float(rng.uniform(-10.0, 30.0))
+        loss.T_far = float(rng.uniform(6.0, 12.0))
+        dt = float(rng.choice([60.0, 600.0, 3600.0]))
+        Q = loss.Q_loss_nodes(T_nodes, A_wall, z)
+        assert Q.tobytes() == ref_transient_Q_loss_nodes(
+            loss, Tg_ref, T_nodes, A_wall).tobytes()
+        loss.advance(T_nodes, A_wall, z, dt)
+        ref_transient_advance(loss, Tg_ref, T_nodes, dt)
+        assert loss.T_ground.tobytes() == Tg_ref.tobytes()
