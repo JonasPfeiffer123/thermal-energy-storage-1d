@@ -408,6 +408,9 @@ class ThermalStorage1D:
             type(self._loss_model).advance is LossModel.advance
         )
 
+        # Unbalanced port mass flows are reported once per storage (see step())
+        self._mass_balance_warned: bool = False
+
     def _compute_wall_areas(self) -> np.ndarray:
         """
         Compute wall area for each node.
@@ -760,7 +763,9 @@ class ThermalStorage1D:
             Outlet (m_dot < 0): Q = |m_dot| · cp · port_temperatures[i]
 
         **Mass balance:** Sum of all port ``m_dot`` values must be zero.
-        The model does not check this explicitly; incorrect balance leads to
+        An imbalance above 1e-6 of the largest port flow raises a
+        ``RuntimeWarning`` the first time it occurs on this storage (later
+        unbalanced steps are not reported); incorrect balance leads to
         physically inconsistent results.
 
         Examples
@@ -814,17 +819,22 @@ class ThermalStorage1D:
         # A fixed-volume tank requires sum(port.m_dot) == 0 (incompressibility);
         # see StorageInputs docstring. A persistent imbalance is not physically
         # meaningful for this model and causes a silent volume/temperature drift,
-        # so warn rather than silently accepting it.
-        if inputs.ports:
+        # so warn rather than silently accepting it. Once per storage: with
+        # measured or synthetic boundary conditions the imbalance usually
+        # persists, and a warning per step would flood the output.
+        if inputs.ports and not self._mass_balance_warned:
             m_dots = [p.m_dot for p in inputs.ports]
             m_dot_sum = sum(m_dots)
             m_dot_max = max(map(abs, m_dots))
             if m_dot_max > 0.0 and abs(m_dot_sum) / m_dot_max > 1e-6:
+                self._mass_balance_warned = True
                 warnings.warn(
                     f"Port mass flows are not balanced (Σṁ = {m_dot_sum:.4g} kg/s, "
-                    f"max |ṁ| = {m_dot_max:.4g} kg/s). For a fixed-volume tank "
-                    "this should be ≈0; an unbalanced flow causes a physically "
-                    "inconsistent volume drift and temperature bias over time.",
+                    f"max |ṁ| = {m_dot_max:.4g} kg/s, t = {state.time:g} s). "
+                    "For a fixed-volume tank this should be ≈0; an unbalanced "
+                    "flow causes a physically inconsistent volume drift and "
+                    "temperature bias over time. Reported once per storage; "
+                    "later unbalanced steps are not reported.",
                     RuntimeWarning,
                     stacklevel=2,
                 )
