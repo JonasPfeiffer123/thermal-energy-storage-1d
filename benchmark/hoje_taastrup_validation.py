@@ -27,6 +27,14 @@ Inlet temperature approximation:
   If F_bot > 0: T_in = T_bot (diffusor pipe sensor)
   F_mid is always <= 0 (no inflow via middle)
 
+Mass flows:
+  Volume flows are converted with the density of water at the diffusor
+  temperature (WaterProperties). The volume flows of the dataset balance, but
+  the water entering and leaving differs in temperature and density (in the
+  real storage the water level changes). The fixed-volume model requires
+  sum(m_dot) = 0, so inflows keep their mass flow and the outflows are scaled
+  to the same total.
+
 Note on T_top/T_mid/T_bot:
   All three are diffusor pipe sensors (Sifnaios 2025 Table 1: "temperature in
   the [top/middle/bottom] diffuser"). During standby they adopt pipe temperature.
@@ -51,7 +59,6 @@ Clone the data repository into the data/ folder:
 """
 
 import sys
-import warnings
 from pathlib import Path
 
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
@@ -97,6 +104,7 @@ A_BOT = 29.4      # m   sqrt(864 m²)
 V_PTES = H / 3.0 * (A_TOP**2 + A_TOP * A_BOT + A_BOT**2)   # ~ 70 578 m³
 
 N = 50            # number of nodes
+WATER = WaterProperties()   # density for the volume-to-mass flow conversion
 DT = 600.0        # s  timestep (10 min = data step)
 
 # Diffusor heights above bottom [m]  (Sifnaios et al. 2025, Section 4.2)
@@ -233,6 +241,10 @@ def make_ports(row: dict) -> list:
     Convention (dataset): positive = inflow INTO storage.
     Inlet temperature approximation: T_in = measured temperature at diffusor.
     F_mid is always <= 0, so no inflow via the middle port.
+
+    The mass flows balance (see "Mass flows" in the module docstring); a step
+    with flow in only one direction (small residual flows at a single
+    diffusor) has no ports.
     """
     def safe(col, default=0.0):
         v = row.get(col, np.nan)
@@ -247,30 +259,41 @@ def make_ports(row: dict) -> list:
     T_bot = safe("T_bot", 40.0)
 
     def m3h_to_kgs(f_m3h, T_C):
-        """Volumetric flow rate m³/h → mass flow rate kg/s (temperature-dependent density)."""
-        rho = 999.85 + 5.332e-2 * T_C - 7.564e-3 * T_C**2
-        return f_m3h * rho / 3600.0
+        """Volumetric flow rate m³/h → mass flow rate kg/s (density of water at T_C)."""
+        return f_m3h * float(WATER.rho(T_C)) / 3600.0
 
-    m_top = m3h_to_kgs(f_top_m3h, T_top)
-    m_mid = m3h_to_kgs(f_mid_m3h, T_mid)
-    m_bot = m3h_to_kgs(f_bot_m3h, T_bot)
+    # Negligible flows (|m_dot| <= 0.01 kg/s) are omitted
+    m_top, m_mid, m_bot = (
+        m if abs(m) > 0.01 else 0.0
+        for m in (m3h_to_kgs(f_top_m3h, T_top),
+                  m3h_to_kgs(f_mid_m3h, T_mid),
+                  m3h_to_kgs(f_bot_m3h, T_bot))
+    )
+
+    # Mass balance: scale the outflows to the total inflow
+    m_in = sum(m for m in (m_top, m_mid, m_bot) if m > 0)
+    m_out = -sum(m for m in (m_top, m_mid, m_bot) if m < 0)
+    if m_in == 0.0 or m_out == 0.0:
+        return []
+    scale = m_in / m_out
+    m_top, m_mid, m_bot = (m * scale if m < 0 else m for m in (m_top, m_mid, m_bot))
 
     ports = []
-    if abs(m_top) > 0.01:
+    if m_top != 0.0:
         ports.append(Port(
             z=H_DIFF_TOP,
             m_dot=m_top,
             T_in=T_top if m_top > 0 else 0.0,
             label="top",
         ))
-    if abs(m_mid) > 0.01:
+    if m_mid != 0.0:
         ports.append(Port(
             z=H_DIFF_MID,
             m_dot=m_mid,
             T_in=T_mid if m_mid > 0 else 0.0,
             label="mid",
         ))
-    if abs(m_bot) > 0.01:
+    if m_bot != 0.0:
         ports.append(Port(
             z=H_DIFF_BOT,
             m_dot=m_bot,
@@ -302,14 +325,6 @@ def _input_rows(df: pd.DataFrame) -> list[dict]:
     cols = [c for c in ("F_top", "F_mid", "F_bot", "T_top", "T_mid", "T_bot", "T_amb")
             if c in df.columns]
     return df[cols].to_dict("records")
-
-
-def _flow_imbalance(port_lists: list) -> np.ndarray:
-    """Relative mass-flow imbalance |Σṁ| / max|ṁ| of every step with flow."""
-    return np.array([
-        abs(sum(p.m_dot for p in ports)) / max(abs(p.m_dot) for p in ports)
-        for ports in port_lists if ports
-    ])
 
 
 def run(storage_factory=None, df=None) -> tuple:
@@ -362,49 +377,34 @@ def run(storage_factory=None, df=None) -> tuple:
     T_profiles_snap = {}   # {month-str: (i, T_array)}
 
     rows = _input_rows(df)
-    port_lists = [make_ports(row) for row in rows]
-
-    # The measured volume flows balance, but make_ports() converts each one to
-    # a mass flow with the density at its own diffusor temperature, which
-    # leaves an imbalance of a few percent. step() would warn on nearly every
-    # step; report the imbalance once instead.
-    imbalance = _flow_imbalance(port_lists)
-    print(
-        f"  Note: port mass flows unbalanced (median |Σṁ|/max|ṁ| = "
-        f"{np.median(imbalance):.1%} over {len(imbalance)} steps with flow); "
-        "step() warning suppressed"
-    )
 
     print("Starting simulation ...")
-    with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore", message="Port mass flows are not balanced", category=RuntimeWarning
-        )
-        for i, (ts, row, ports) in enumerate(zip(df.index, rows, port_lists)):
-            T_sim_top[i] = state.temperatures[k_top]
-            T_sim_mid[i] = state.temperatures[k_mid]
-            T_sim_bot[i] = state.temperatures[k_bot]
+    for i, (ts, row) in enumerate(zip(df.index, rows)):
+        T_sim_top[i] = state.temperatures[k_top]
+        T_sim_mid[i] = state.temperatures[k_mid]
+        T_sim_bot[i] = state.temperatures[k_bot]
 
-            # Monthly profile snapshots
-            if ts.day == 1 and ts.hour == 0 and ts.minute == 0:
-                T_profiles_snap[ts.strftime("%Y-%m")] = (i, state.temperatures.copy())
+        # Monthly profile snapshots
+        if ts.day == 1 and ts.hour == 0 and ts.minute == 0:
+            T_profiles_snap[ts.strftime("%Y-%m")] = (i, state.temperatures.copy())
 
-            # Time-varying outdoor temperature
-            t_amb = float(row.get("T_amb", t_amb_mean))
-            if not np.isfinite(t_amb):
-                t_amb = t_amb_mean
-            _update_loss_temp(storage, t_amb)
+        # Time-varying outdoor temperature
+        t_amb = float(row.get("T_amb", t_amb_mean))
+        if not np.isfinite(t_amb):
+            t_amb = t_amb_mean
+        _update_loss_temp(storage, t_amb)
 
-            inputs = StorageInputs(ports=ports)
-            outputs = storage.step(state, dt=DT, inputs=inputs)
-            state = outputs.state
+        ports = make_ports(row)
+        inputs = StorageInputs(ports=ports)
+        outputs = storage.step(state, dt=DT, inputs=inputs)
+        state = outputs.state
 
-            if i % 10000 == 0:
-                m_in = sum(p.m_dot for p in ports if p.m_dot > 0)
-                print(
-                    f"  {ts.date()}  ports={len(ports)}  m_in={m_in:.1f} kg/s"
-                    f"  T_top={state.temperatures[0]:.1f}°C"
-                )
+        if i % 10000 == 0:
+            m_in = sum(p.m_dot for p in ports if p.m_dot > 0)
+            print(
+                f"  {ts.date()}  ports={len(ports)}  m_in={m_in:.1f} kg/s"
+                f"  T_top={state.temperatures[0]:.1f}°C"
+            )
 
     print("Simulation complete.")
     return df, T_sim_top, T_sim_mid, T_sim_bot, T_profiles_snap, node_heights
