@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- `TransientGroundLoss` costs about half as much per step, with
+  **bit-identical results** and no API change: `advance()` updates all
+  ground layers in one array expression instead of a loop over the layers,
+  and `Q_loss_nodes()` needs fewer NumPy calls. `step()` with this loss model
+  (scenario of `benchmark/benchmark_step_performance.py --loss transient`;
+  Windows, Python 3.11, NumPy 2.3; minimum of 3 interleaved runs):
+
+  | nodes | before [µs/step] | after [µs/step] | speed-up |
+  |------:|-----------------:|----------------:|---------:|
+  | 5     | 58.5             | 41.3            | 1.42x    |
+  | 20    | 80.2             | 63.2            | 1.27x    |
+  | 50    | 113.5            | 98.9            | 1.15x    |
+
+  Høje Taastrup 2024 (50 nodes, 10-minute steps): 102 → 90 µs/step.
+- `SplitAmbientLoss.Q_loss_nodes()` needs fewer NumPy calls (about 0.7 µs
+  per step, bit-identical).
+- `benchmark/hoje_taastrup_validation.py` loads the dataset once, iterates
+  the inputs without `DataFrame.iterrows()`, and reports the port mass-flow
+  imbalance once per run instead of emitting about 41 000 `RuntimeWarning`s.
+  The full validation run takes 15 s instead of 24 s; results are unchanged
+  (byte-identical comparison CSV).
+
+### Added
+- `benchmark/benchmark_step_performance.py --loss {constant,split,transient}`
+  selects the loss model of the benchmark scenario.
+- Bit-identity tests of `SplitAmbientLoss` and `TransientGroundLoss` against
+  their former implementations (`tests/test_losses.py`).
+
 ### Fixed
 - `benchmark/hoje_taastrup_validation.py` reads the 2024 dataset from
   `data/HojeTaastrupData/Data/`, where the HojeTaastrupData repository now

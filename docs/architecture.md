@@ -146,8 +146,11 @@ Every kernel performs the floating-point operations of the former array code
 in the same order, so results are bit-identical to v1.0.0:
 `tests/test_golden_master.py` compares complete one-year trajectories of 133
 configurations, `tests/test_kernels.py` the kernels against the former array
-implementations. `benchmark/benchmark_step_performance.py` measures the
-per-step cost.
+implementations. The loss models stay on NumPy with as few calls per step as
+possible (`TransientGroundLoss.advance()` updates all ground layers in one
+array expression); `tests/test_losses.py` checks them bit for bit against
+their former implementations. `benchmark/benchmark_step_performance.py`
+measures the per-step cost (`--loss` selects the loss model).
 
 ### State Objects
 

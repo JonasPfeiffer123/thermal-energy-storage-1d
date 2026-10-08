@@ -178,11 +178,9 @@ class SplitAmbientLoss(LossModel):
         Q = U_wall · A[k] · (T_ambient     - T[k]) for all remaining nodes.
         """
         del _z_node_centers
-        dT = self.T_ambient - T_nodes
-        U_nodes = np.full(len(T_nodes), self.U_wall)
-        U_nodes[0] = self.U_lid  # Index 0 = top = lid
-        Q = U_nodes * A_wall_nodes * dT
-        # Optionally override lid node with separate air temperature
+        # Wall/bottom formula for all nodes; the lid entry is overwritten below
+        Q = self.U_wall * A_wall_nodes * (self.T_ambient - T_nodes)
+        # Lid node (index 0 = top) with its own U-value and air temperature
         Q[0] = self.U_lid * A_wall_nodes[0] * (self.T_ambient_lid - T_nodes[0])
         return Q
 
@@ -444,18 +442,13 @@ class TransientGroundLoss(LossModel):
         Remaining nodes: Q = A[i] · (T_g[i,1] − T[i]) / R_1.
         """
         del _z_node_centers
-        n = len(T_nodes)
-        Tg = self._ensure_init(n)
+        Tg = self._ensure_init(len(T_nodes))
 
-        Q = np.empty(n)
+        # Wall + bottom: transient (heat flow from first ground layer);
+        # the lid entry is overwritten below
+        Q = A_wall_nodes * (Tg[:, 0] - T_nodes) / self._R
         # Lid: steady-state
         Q[0] = self.U_lid * A_wall_nodes[0] * (self.T_ambient_lid - T_nodes[0])
-        # Wall + bottom: transient (heat flow from first ground layer)
-        Q[1:] = (
-            A_wall_nodes[1:]
-            * (Tg[1:, 0] - T_nodes[1:])
-            / self._R
-        )
         return Q
 
     def advance(
@@ -471,24 +464,23 @@ class TransientGroundLoss(LossModel):
         Node 0 (lid) is not treated transiently.
         """
         del A_wall_nodes, _z_node_centers
-        n = len(T_nodes)
-        Tg = self._ensure_init(n)   # (n_nodes, n_layers)
+        Tg = self._ensure_init(len(T_nodes))   # (n_nodes, n_layers)
         R = self._R
-        C = self._C
-        dT = np.empty_like(Tg)
 
-        for j in range(self.n_layers):
-            # Left temperature (closer to storage)
-            T_left = T_nodes if j == 0 else Tg[:, j - 1]
-            # Right temperature (toward far field)
-            T_right = np.full(n, self.T_far) if j == self.n_layers - 1 else Tg[:, j + 1]
+        # Wall/bottom rows only: the lid row (node 0) is not updated
+        # (steady-state loss model). All layers advance at once from the old
+        # field; same per-element operations as a layer-by-layer update.
+        G = Tg[1:]
+        # Left temperature (closer to storage)
+        T_left = np.empty_like(G)
+        T_left[:, 0] = T_nodes[1:]
+        T_left[:, 1:] = G[:, :-1]
+        # Right temperature (toward far field)
+        T_right = np.empty_like(G)
+        T_right[:, :-1] = G[:, 1:]
+        T_right[:, -1] = self.T_far
 
-            dT[:, j] = (dt / C) * ((T_left - Tg[:, j]) / R - (Tg[:, j] - T_right) / R)
-
-        # Do not update lid node (steady-state loss model)
-        dT[0, :] = 0.0
-
-        Tg += dT
+        G += (dt / self._C) * ((T_left - G) / R - (G - T_right) / R)
 
     @property
     def T_ground(self) -> np.ndarray | None:

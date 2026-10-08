@@ -51,6 +51,7 @@ Clone the data repository into the data/ folder:
 """
 
 import sys
+import warnings
 from pathlib import Path
 
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
@@ -222,9 +223,12 @@ def init_profile_from_lanze(row: pd.Series) -> np.ndarray:
 # ---------------------------------------------------------------------------
 # Create port list
 # ---------------------------------------------------------------------------
-def make_ports(row: pd.Series) -> list:
+def make_ports(row: dict) -> list:
     """
     Three ports at the diffusor positions.
+
+    ``row`` maps column names to the values of one timestep (a dict from
+    ``_input_rows()`` or a pandas row).
 
     Convention (dataset): positive = inflow INTO storage.
     Inlet temperature approximation: T_in = measured temperature at diffusor.
@@ -288,7 +292,27 @@ def _update_loss_temp(storage: ThermalStorage1D, t_amb: float) -> None:
         lm.T_ambient_lid = t_amb
 
 
-def run(storage_factory=None) -> tuple:
+def _input_rows(df: pd.DataFrame) -> list[dict]:
+    """
+    Boundary-condition columns of every timestep as dicts.
+
+    ``make_ports()`` and the time loop read these per step; iterating dicts is
+    much faster than ``df.iterrows()`` on the full dataset (~100 columns).
+    """
+    cols = [c for c in ("F_top", "F_mid", "F_bot", "T_top", "T_mid", "T_bot", "T_amb")
+            if c in df.columns]
+    return df[cols].to_dict("records")
+
+
+def _flow_imbalance(port_lists: list) -> np.ndarray:
+    """Relative mass-flow imbalance |Σṁ| / max|ṁ| of every step with flow."""
+    return np.array([
+        abs(sum(p.m_dot for p in ports)) / max(abs(p.m_dot) for p in ports)
+        for ports in port_lists if ports
+    ])
+
+
+def run(storage_factory=None, df=None) -> tuple:
     """
     Annual simulation 2024.
 
@@ -297,14 +321,17 @@ def run(storage_factory=None) -> tuple:
     storage_factory : callable, optional
         Function ``f(t_amb_mean: float) -> ThermalStorage1D``.
         Default: ``build_storage`` (SplitAmbientLoss).
+    df : pandas.DataFrame, optional
+        Dataset from ``load_data()``; loaded if not given.
 
     Returns (df, T_sim_top, T_sim_mid, T_sim_bot, T_profiles_snap, node_heights).
     """
     if storage_factory is None:
         storage_factory = build_storage
 
-    print("Loading dataset ...")
-    df = load_data()
+    if df is None:
+        print("Loading dataset ...")
+        df = load_data()
     print(f"  {len(df)} timesteps  ({df.index[0].date()} to {df.index[-1].date()})")
 
     t_amb_mean = float(df["T_amb"].mean())
@@ -334,33 +361,50 @@ def run(storage_factory=None) -> tuple:
     T_sim_bot = np.full(n, np.nan)
     T_profiles_snap = {}   # {month-str: (i, T_array)}
 
+    rows = _input_rows(df)
+    port_lists = [make_ports(row) for row in rows]
+
+    # The measured volume flows balance, but make_ports() converts each one to
+    # a mass flow with the density at its own diffusor temperature, which
+    # leaves an imbalance of a few percent. step() would warn on nearly every
+    # step; report the imbalance once instead.
+    imbalance = _flow_imbalance(port_lists)
+    print(
+        f"  Note: port mass flows unbalanced (median |Σṁ|/max|ṁ| = "
+        f"{np.median(imbalance):.1%} over {len(imbalance)} steps with flow); "
+        "step() warning suppressed"
+    )
+
     print("Starting simulation ...")
-    for i, (ts, row) in enumerate(df.iterrows()):
-        T_sim_top[i] = state.temperatures[k_top]
-        T_sim_mid[i] = state.temperatures[k_mid]
-        T_sim_bot[i] = state.temperatures[k_bot]
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore", message="Port mass flows are not balanced", category=RuntimeWarning
+        )
+        for i, (ts, row, ports) in enumerate(zip(df.index, rows, port_lists)):
+            T_sim_top[i] = state.temperatures[k_top]
+            T_sim_mid[i] = state.temperatures[k_mid]
+            T_sim_bot[i] = state.temperatures[k_bot]
 
-        # Monthly profile snapshots
-        if ts.day == 1 and ts.hour == 0 and ts.minute == 0:
-            T_profiles_snap[ts.strftime("%Y-%m")] = (i, state.temperatures.copy())
+            # Monthly profile snapshots
+            if ts.day == 1 and ts.hour == 0 and ts.minute == 0:
+                T_profiles_snap[ts.strftime("%Y-%m")] = (i, state.temperatures.copy())
 
-        # Time-varying outdoor temperature
-        t_amb = float(row.get("T_amb", t_amb_mean))
-        if not np.isfinite(t_amb):
-            t_amb = t_amb_mean
-        _update_loss_temp(storage, t_amb)
+            # Time-varying outdoor temperature
+            t_amb = float(row.get("T_amb", t_amb_mean))
+            if not np.isfinite(t_amb):
+                t_amb = t_amb_mean
+            _update_loss_temp(storage, t_amb)
 
-        ports = make_ports(row)
-        inputs = StorageInputs(ports=ports)
-        outputs = storage.step(state, dt=DT, inputs=inputs)
-        state = outputs.state
+            inputs = StorageInputs(ports=ports)
+            outputs = storage.step(state, dt=DT, inputs=inputs)
+            state = outputs.state
 
-        if i % 10000 == 0:
-            m_in = sum(p.m_dot for p in ports if p.m_dot > 0)
-            print(
-                f"  {ts.date()}  ports={len(ports)}  m_in={m_in:.1f} kg/s"
-                f"  T_top={state.temperatures[0]:.1f}°C"
-            )
+            if i % 10000 == 0:
+                m_in = sum(p.m_dot for p in ports if p.m_dot > 0)
+                print(
+                    f"  {ts.date()}  ports={len(ports)}  m_in={m_in:.1f} kg/s"
+                    f"  T_top={state.temperatures[0]:.1f}°C"
+                )
 
     print("Simulation complete.")
     return df, T_sim_top, T_sim_mid, T_sim_bot, T_profiles_snap, node_heights
@@ -613,7 +657,7 @@ def main() -> None:
 
     # --- Simulation 2: TransientGroundLoss (1D RC ground network) ---
     print("\n--- TransientGroundLoss ---")
-    _, T_top_t, T_mid_t, T_bot_t, _snaps_t, _ = run(build_storage_transient)
+    _, T_top_t, T_mid_t, T_bot_t, _snaps_t, _ = run(build_storage_transient, df)
     mae_t = compute_mae(df, T_top_t, T_mid_t, T_bot_t, label="TransientGroundLoss")
 
     # --- Summary ---
