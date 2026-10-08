@@ -24,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Høje Taastrup 2024 (50 nodes, 10-minute steps): 102 → 90 µs/step.
 - `SplitAmbientLoss.Q_loss_nodes()` needs fewer NumPy calls (about 0.7 µs
   per step, bit-identical).
+- `benchmark/hoje_taastrup_validation.py` loads the dataset once, iterates
+  the inputs without `DataFrame.iterrows()`, and reports the port mass-flow
+  imbalance once per run instead of emitting about 41 000 `RuntimeWarning`s.
+  The full validation run takes 15 s instead of 24 s; results are unchanged
+  (byte-identical comparison CSV).
 
 ### Added
 - `benchmark/benchmark_step_performance.py --loss {constant,split,transient}`
