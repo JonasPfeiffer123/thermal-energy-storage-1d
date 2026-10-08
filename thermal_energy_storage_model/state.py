@@ -121,7 +121,8 @@ class StorageInputs:
     -----
     **Mass balance:** The sum of all port ``m_dot`` values should
     be zero (incompressibility). The model is robust against small numerical
-    mismatches, but physically incorrect balances cause temperature drift.
+    mismatches, but physically incorrect balances cause temperature drift;
+    ``ThermalStorage1D.step()`` warns once per storage when it sees one.
 
     **Convenience constructor:** For the classic two-loop operation
     (charge top/bottom + discharge bottom/top), use the class method
