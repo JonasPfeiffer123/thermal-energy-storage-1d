@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- The `RuntimeWarning` for unbalanced port mass flows is emitted once per
+  storage instead of on every step; it now also names the simulation time of
+  the first unbalanced step. Its text contains the flow values, so Python's
+  warning filter could not merge repeats: a persistent imbalance printed one
+  warning per step (about 41 000 per year at 10-minute steps), which
+  flooded the output and slowed the run down.
 - `TransientGroundLoss` costs about half as much per step, with
   **bit-identical results** and no API change: `advance()` updates all
   ground layers in one array expression instead of a loop over the layers,
