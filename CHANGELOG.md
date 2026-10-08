@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `benchmark/hoje_taastrup_validation.py` reads the 2024 dataset from
+  `data/HojeTaastrupData/Data/`, where the HojeTaastrupData repository now
+  stores its CSV files.
+
 ## [1.1.0] - 2026-09-30
 
 ### Changed
