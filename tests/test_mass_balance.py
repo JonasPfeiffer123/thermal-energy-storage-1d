@@ -57,3 +57,23 @@ def test_idle_state_does_not_warn(make_storage):
     with warnings.catch_warnings():
         warnings.simplefilter("error", RuntimeWarning)
         storage.step(state, dt=10.0, inputs=StorageInputs(ports=[]))  # must not raise
+
+
+def test_unbalanced_ports_warn_once_per_storage(make_storage):
+    """A persistent imbalance is reported on the first step only; a new
+    storage reports it again. ("always" rules out Python's own
+    once-per-location filtering.)"""
+    inputs = StorageInputs(ports=[Port(z=5.0, m_dot=5.0, T_in=80.0)])
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        storage = make_storage(n_nodes=10)
+        state = storage.initialize(T_init=50.0)
+        for _ in range(3):
+            state = storage.step(state, dt=10.0, inputs=inputs).state
+        assert len(caught) == 1
+        assert "not balanced" in str(caught[0].message)
+
+        other = make_storage(n_nodes=10)
+        other.step(other.initialize(T_init=50.0), dt=10.0, inputs=inputs)
+        assert len(caught) == 2
