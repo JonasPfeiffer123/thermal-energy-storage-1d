@@ -24,11 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Høje Taastrup 2024 (50 nodes, 10-minute steps): 102 → 90 µs/step.
 - `SplitAmbientLoss.Q_loss_nodes()` needs fewer NumPy calls (about 0.7 µs
   per step, bit-identical).
-- `benchmark/hoje_taastrup_validation.py` loads the dataset once, iterates
-  the inputs without `DataFrame.iterrows()`, and reports the port mass-flow
-  imbalance once per run instead of emitting about 41 000 `RuntimeWarning`s.
-  The full validation run takes 15 s instead of 24 s; results are unchanged
-  (byte-identical comparison CSV).
+- `benchmark/hoje_taastrup_validation.py` loads the dataset once and
+  iterates the inputs without `DataFrame.iterrows()`; the full validation
+  run takes 15 s instead of 24 s.
 
 ### Added
 - `benchmark/benchmark_step_performance.py --loss {constant,split,transient}`
@@ -40,6 +38,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `benchmark/hoje_taastrup_validation.py` reads the 2024 dataset from
   `data/HojeTaastrupData/Data/`, where the HojeTaastrupData repository now
   stores its CSV files.
+- `benchmark/hoje_taastrup_validation.py` feeds balanced port mass flows.
+  It converted every measured volume flow with a density polynomial
+  truncated after the quadratic term (2 % too low at 85 °C) at its own
+  diffusor temperature, which left the mass flows of 41 099 of 52 704 steps
+  unbalanced by a median 3.3 % (one `RuntimeWarning` per step). Volume flows
+  are now converted with `WaterProperties`, and the outflows are scaled to
+  the total inflow, as the fixed-volume model requires. MAE against the
+  lance sensors (top / middle / bottom / total), result plots regenerated:
+
+  | loss model          | before                    | after                     |
+  |---------------------|---------------------------|---------------------------|
+  | SplitAmbientLoss    | 2.13 / 3.22 / 1.59 / 2.31 | 2.39 / 2.85 / 1.00 / 2.08 |
+  | TransientGroundLoss | 2.09 / 3.48 / 1.57 / 2.38 | 2.35 / 3.15 / 0.95 / 2.15 |
 
 ## [1.1.0] - 2026-09-30
 
