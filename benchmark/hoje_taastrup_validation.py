@@ -44,7 +44,7 @@ The measurement data is NOT included in this repository. Download it from:
     https://github.com/PitStorages/HojeTaastrupData
 
 Expected file path (relative to repo root):
-    data/HojeTaastrupData/ptes_operation_data_hoje_taastrup_2024.csv
+    data/HojeTaastrupData/Data/ptes_operation_data_hoje_taastrup_2024.csv
 
 Clone the data repository into the data/ folder:
     git clone https://github.com/PitStorages/HojeTaastrupData data/HojeTaastrupData
@@ -67,7 +67,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parent.parent
 DATA_FILE = (
     ROOT
-    / "data/HojeTaastrupData"
+    / "data/HojeTaastrupData/Data"
     / "ptes_operation_data_hoje_taastrup_2024.csv"
 )
 OUT_DIR = ROOT / "benchmark/results/hoje_taastrup"
