@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-10-16
+
+### Upgrading from 1.x
+- Ground temperatures of `TransientGroundLoss`: read `state.loss_state`
+  instead of `loss.T_ground`. States from `initialize()` carry them; a
+  state built by hand starts from the initial ground field. Custom loss
+  models with a history implement `initial_state()` and take / return the
+  state in `Q_loss_nodes()` / `advance()` (see `docs/architecture.md`).
+- Outlet port temperatures are energy-consistent (see *Changed*): results
+  differ where inflow and outflow share a node (simultaneous operation) and
+  with the implicit solver (end-of-step temperature).
+- Time-varying air temperature: pass `StorageInputs.T_ambient` per step
+  (setting loss-model attributes between steps still works).
+- matplotlib is no longer installed with the package: install the extras
+  `examples`, `benchmark` or `ui` for the scripts and the UI.
+- `step()` raises `ValueError` for inputs it used to accept silently
+  (non-positive `dt`, NaN, negative heat-exchanger flows, ...).
+
 ### Changed
 - **Breaking:** `StorageState` is the complete simulation state. The ground
   temperatures of `TransientGroundLoss` moved from the loss-model object into
@@ -19,8 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   argument, and `advance()` returns the new field instead of modifying it.
   New `LossModel.initial_state()` for loss models with state; custom models
   that keep a state inside the object (overriding only `advance()`) still
-  run, with that state outside `StorageState`. Because of this API change
-  the next release is a major version.
+  run, with that state outside `StorageState`. This API change makes
+  this release a major version.
 - **Breaking (results):** outlet port temperatures are the temperatures at
   which the model removes the outflowing energy, so the step outputs close
   the energy balance at the coupling interface. Where an inflow enters the
@@ -238,6 +256,7 @@ Archived on Zenodo: [10.5281/zenodo.20595165](https://doi.org/10.5281/zenodo.205
   this model (accepted; full paper forthcoming).
 - CI workflow running the test suite on push and pull request.
 
-[Unreleased]: https://github.com/JonasPfeiffer123/thermal-energy-storage-1d/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/JonasPfeiffer123/thermal-energy-storage-1d/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/JonasPfeiffer123/thermal-energy-storage-1d/compare/v1.1.0...v2.0.0
 [1.1.0]: https://github.com/JonasPfeiffer123/thermal-energy-storage-1d/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/JonasPfeiffer123/thermal-energy-storage-1d/releases/tag/v1.0.0
