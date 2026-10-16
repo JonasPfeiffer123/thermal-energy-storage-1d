@@ -95,7 +95,7 @@ class UniformDiffusor(DiffusorModel):
     Port mass flow and enthalpy are uniformly distributed over all nodes
     whose node center lies within the diffusor zone:
 
-        |z_knoten - z_port| ≤ H_zone / 2
+        |z_node - z_port| ≤ H_zone / 2
 
     This approximates homogeneous inflow over the diffusor height and
     creates a flatter temperature gradient in the diffusor zone, which

@@ -173,7 +173,7 @@ class StorageConfig:
     In real storage, a denser (cooler) layer cannot persist above a lighter
     (warmer) layer. Buoyancy forces trigger convective mixing.
 
-    ``True`` (Standard)
+    ``True`` (default)
         After each Euler integration, the profile is checked for unstable
         inversions (T[i] < T[i+1], i.e., cooler above warmer). Neighboring
         inverted nodes are mixed using mass-weighted averaging until the
@@ -205,7 +205,7 @@ class StorageConfig:
     """
     Time-integration solver.
 
-    ``"explicit"`` (Standard)
+    ``"explicit"`` (default)
         Explicit Euler method. Fast and simple, but requires the CFL
         condition (v*dt/dz <= 1). Typical stable timestep range is 30-600 s.
 
@@ -253,7 +253,7 @@ class StorageConfig:
     both, and the sub-steps are integrated sequentially. The publicly
     returned state advances by the full external ``dt``.
 
-    ``True`` (Standard)
+    ``True`` (default)
         Sub-step automatically; the explicit solver stays stable for any
         ``dt`` without the caller having to respect the stability limit.
 
@@ -276,7 +276,7 @@ class StorageConfig:
 
     Supported types
     ---------------
-    ``None`` (Standard)
+    ``None`` (default)
         Automatically maps to :class:`PointDiffusor` - full mass flow to the
         nearest node (previous behavior).
 
@@ -304,7 +304,7 @@ class StorageConfig:
     (``h_headspace_water``). Its temperature is integrated exactly over each
     step (stable for any timestep, also for a light gas-only headspace).
 
-    ``False`` (Standard)
+    ``False`` (default)
         No headspace model.
 
     ``True``

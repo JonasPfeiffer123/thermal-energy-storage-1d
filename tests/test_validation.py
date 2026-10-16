@@ -10,6 +10,7 @@ accuracy claim.
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import re
 import subprocess
@@ -27,9 +28,8 @@ SCRIPT = ROOT / "benchmark" / "dronninglund_validation.py"
 MAE_REGRESSION_BOUND_K = 8.0  # loose guard; current model is well below this
 
 
-pandas = pytest.importorskip("pandas", reason="pandas not installed")
-
-
+@pytest.mark.skipif(importlib.util.find_spec("pandas") is None,
+                    reason="pandas not installed")
 @pytest.mark.skipif(not DATA_FILE.exists(), reason="Dronninglund data not cloned")
 def test_dronninglund_total_mae_regression(tmp_path):
     env = dict(

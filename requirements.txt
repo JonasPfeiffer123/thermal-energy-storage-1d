@@ -1,2 +1,6 @@
-numpy>=1.20
+# Everything needed to run the examples and benchmark scripts from a clone.
+# The model itself only needs NumPy (see pyproject.toml); installing the
+# package with extras is equivalent: pip install -e ".[examples,benchmark]"
+numpy>=1.21.6
 matplotlib>=3.4
+pandas>=1.3

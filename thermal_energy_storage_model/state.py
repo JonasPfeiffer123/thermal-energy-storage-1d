@@ -43,9 +43,9 @@ class StorageState:
     --------
         >>> import numpy as np
         >>> state = StorageState(temperatures=np.linspace(80, 40, 20), time=3600.0)
-        >>> state.temperatures[0]   # Top temperature
+        >>> state.T_top      # temperatures[0], top layer
         80.0
-        >>> state.temperatures[-1]  # Bottom temperature
+        >>> state.T_bottom   # temperatures[-1], bottom layer
         40.0
     """
 
