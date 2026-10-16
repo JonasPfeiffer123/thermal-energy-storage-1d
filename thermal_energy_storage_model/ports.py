@@ -83,8 +83,12 @@ class HeatExchangerPort:
         ε     = 1 − exp(−NTU)           [-]
         Q     = ε · C_ext · (T_ext_in − T̄_tank)   [W]
 
-    Here T_bar_tank is the area-weighted mean storage temperature
-    in the active HX zone [z - H_hx/2 ... z + H_hx/2].
+    Here T_bar_tank is the mean storage temperature of the nodes in the
+    active HX zone [z - H_hx/2 ... z + H_hx/2] (equal weights). The implicit
+    solver evaluates it at the end of the step (no overshoot beyond
+    ``T_ext_in`` for any timestep), the explicit solver at the start of each
+    sub-step. ``UA``, ``H_hx`` and ``m_dot_ext`` must be >= 0 (checked by
+    ``ThermalStorage1D.step()``).
 
     Parameters
     ----------

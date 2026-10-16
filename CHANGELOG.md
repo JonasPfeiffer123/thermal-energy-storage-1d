@@ -8,22 +8,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Breaking:** `StorageState` is the complete simulation state. The ground
+  temperatures of `TransientGroundLoss` moved from the loss-model object into
+  the new field `StorageState.loss_state` (shape `(n_nodes, n_layers)`, set by
+  `initialize()`). `step()` now depends only on `(state, dt, inputs)` and the
+  configuration: stepping the same state twice gives the same result
+  (rollback, iterative coupling), which it did not before.
+  `TransientGroundLoss.T_ground` is removed (use `state.loss_state`);
+  `Q_loss_nodes()` and `advance()` take the ground field as an extra
+  argument, and `advance()` returns the new field instead of modifying it.
+  New `LossModel.initial_state()` for loss models with state; custom models
+  that keep a state inside the object (overriding only `advance()`) still
+  run, with that state outside `StorageState`. Because of this API change
+  the next release is a major version.
+- **Breaking (results):** outlet port temperatures are the temperatures at
+  which the model removes the outflowing energy, so the step outputs close
+  the energy balance at the coupling interface. Where an inflow enters the
+  same node (e.g. simultaneous charging and discharging through the top node
+  with `two_port()`), the outflow takes the inflowing fluid first, as in a
+  hydraulic header; before, the outlet reported the node temperature while
+  the energy balance had removed the inlet temperature (golden master: up to
+  48 K in hours of simultaneous operation). With the implicit solver the
+  outlet reports the end-of-step temperature, at which the outflow leaves
+  (`tests/test_regression.py`: 78.00 → 73.05 °C). Inlet ports report the
+  start-of-step node temperature as before.
+- `StorageOutputs.Q_loss` is the loss applied in the step.
+  `TransientGroundLoss` reported the loss of the ground field after the
+  step (golden master: up to 16 W in 18 scenarios).
+- `get_soc()` takes the full-charge energy with the fluid properties at
+  `T_max` (was the nominal `rho`/`cp`): a tank uniformly at `T_max` has
+  SOC = 1 also with `WaterProperties` (was 0.9916 at 90 °C).
 - Headspace model: the lid is no longer part of the top node's loss area
   (the water surface lost heat through the lid twice: directly and through
-  the headspace and roof), and the exchange area is the lid area of the
-  geometry.
+  the headspace and roof), the roof sees the air-side temperature of the loss
+  model (was always `StorageConfig.T_ambient`), and the exchange area is the
+  lid area of the geometry.
 - Explicit solver: sub-steps keep the Courant number at or below 0.9 (as
   before) and, new, the combined stability number CFL + conduction /
   heat-exchanger number at or below 1; where advection dominates the
   sub-step count is unchanged. The end time after sub-steps is exactly
   `t + dt` (was the sum of the sub-steps, off by up to 5e-6 s per year).
   With `auto_substep=False` the warning names the combined number.
-- Golden master re-recorded (`tests/golden/reference.npz`): 120 of 133
-  scenarios are bit-identical; the other 13 are the explicit scenarios whose
-  old steps exceeded the stability limit (50 nodes; 20 nodes on the 4 m
-  pyramid and PTES), the heat-exchanger scenarios and the headspace scenario.
-  The bitwise check of the implicit heat-exchanger scenario (LAPACK) also
-  requires the NumPy version of the reference.
+- Golden master re-recorded (`tests/golden/reference.npz`). Temperatures are
+  bit-identical in 120 of 133 scenarios; the other 13 are the explicit
+  scenarios whose old steps exceeded the stability limit (50 nodes; 20 nodes
+  on the 4 m pyramid and PTES), the heat-exchanger scenarios and the
+  headspace scenario. SOC changed only with `WaterProperties`. The bitwise
+  check of the implicit heat-exchanger scenario (LAPACK) also requires the
+  NumPy version of the reference; `GOLDEN_BITWISE=0` disables the bitwise
+  check (CI).
+- Validation results unchanged: `benchmark/dronninglund_validation.py` and
+  `benchmark/hoje_taastrup_validation.py` produce byte-identical comparison
+  CSVs (MAE 4.65 K; 2.08 / 2.15 K).
+- `ThermalStorage1D.step()` costs the same within the measurement noise
+  (±5 %, A/B in one process), including the new input checks.
 - The `RuntimeWarning` for unbalanced port mass flows is emitted once per
   storage instead of on every step; it now also names the simulation time of
   the first unbalanced step. Its text contains the flow values, so Python's
@@ -51,8 +89,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   run takes 15 s instead of 24 s.
 
 ### Added
-- Tests: stability of heat exchangers, headspace, conduction-limited
-  sub-steps and thin ground layers.
+- `StorageInputs.T_ambient` (also `two_port(T_ambient=...)`): ambient air
+  temperature for one step, e.g. from a weather file. It replaces the
+  air-side temperature of the loss model (`ConstantAmbientLoss.T_ambient`,
+  the lid temperature of `SplitAmbientLoss` and `TransientGroundLoss`;
+  `LossModel.air_temperature_attr`, `with_air_temperature()`) and the
+  headspace roof temperature, without modifying the configured loss model.
+- Input validation: `step()` rejects a non-positive or non-finite `dt`, a
+  state of another storage, non-finite port values, negative heat-exchanger
+  flows or UA and unknown `flow_direction`; the configuration rejects NaN,
+  non-integer `n_nodes` and invalid headspace / `T_ground` parameters
+  (`ValueError`, `TypeError` for `n_nodes`).
+- Tests: energy balance of the step outputs for simultaneous operation,
+  diffusors, heat exchangers and `TransientGroundLoss`
+  (`tests/test_conservation.py`); the co-simulation contract
+  (`tests/test_cosim_contract.py`); stability of heat exchangers, headspace,
+  conduction-limited sub-steps and thin ground layers.
 - `benchmark/benchmark_step_performance.py --loss {constant,split,transient}`
   selects the loss model of the benchmark scenario.
 - Bit-identity tests of `SplitAmbientLoss` and `TransientGroundLoss` against

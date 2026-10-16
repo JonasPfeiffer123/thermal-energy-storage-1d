@@ -16,7 +16,12 @@ import math
 import numpy as np
 import pytest
 
-from thermal_energy_storage_model import StorageConfig, StorageInputs, ThermalStorage1D
+from thermal_energy_storage_model import (
+    SplitAmbientLoss,
+    StorageConfig,
+    StorageInputs,
+    ThermalStorage1D,
+)
 
 
 def _make_headspace_storage(**overrides):
@@ -101,6 +106,46 @@ def test_headspace_removes_lid_from_top_node_loss_area():
     A_lid = 100.0 / 5.0
     assert with_hs.A_wall[0] == pytest.approx(without.A_wall[0] - A_lid)
     assert np.array_equal(with_hs.A_wall[1:], without.A_wall[1:])
+
+
+def test_headspace_roof_uses_loss_model_air_temperature():
+    """The roof sees the air-side temperature of the loss model ..."""
+    loss = SplitAmbientLoss(U_lid=0.2, U_wall=0.3, T_ambient=8.0, T_ambient_lid=-5.0)
+    storage = _make_headspace_storage(loss_model=loss)
+    state = storage.initialize(T_init=60.0)
+    out = storage.step(state, dt=3600.0, inputs=StorageInputs())
+    T_expected, _, _, _ = _exact_headspace(99.0, 60.0, -5.0, 3600.0)
+    assert out.T_headspace == pytest.approx(T_expected, rel=1e-12)
+
+    # ... or StorageInputs.T_ambient when given for the step.
+    out = storage.step(state, dt=3600.0, inputs=StorageInputs(T_ambient=20.0))
+    T_expected, _, _, _ = _exact_headspace(99.0, 60.0, 20.0, 3600.0)
+    assert out.T_headspace == pytest.approx(T_expected, rel=1e-12)
+
+
+def test_headspace_exchange_is_a_fixed_point_at_thermal_equilibrium():
+    """If headspace, top water and ambient are all equal, no heat flows and
+    the headspace temperature must not drift."""
+    storage = _make_headspace_storage()
+    Q_hs_to_water, T_hs_new = storage._compute_headspace_exchange(
+        T_headspace=10.0, T_top=10.0, dt=100.0
+    )
+    assert Q_hs_to_water == pytest.approx(0.0)
+    assert T_hs_new == pytest.approx(10.0)
+
+
+def test_headspace_hotter_than_water_and_ambient_cools_down():
+    storage = _make_headspace_storage()
+    Q_hs_to_water, T_hs_new = storage._compute_headspace_exchange(
+        T_headspace=99.0, T_top=60.0, dt=30.0
+    )
+    assert Q_hs_to_water > 0.0   # heat flows into storage, per the sign convention
+    assert T_hs_new < 99.0       # headspace loses energy via both paths
+
+
+# ---------------------------------------------------------------------------
+# Integration through step()
+# ---------------------------------------------------------------------------
 
 
 def test_headspace_initializes_from_config():

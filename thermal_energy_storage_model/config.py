@@ -51,12 +51,13 @@ class StorageConfig:
         Only used when ``loss_model=None`` (backward compatibility).
     T_ambient : float, optional
         Ambient temperature for heat-loss calculation [°C]. Default: 10.0.
-        Only used when ``loss_model=None`` (backward compatibility).
+        Used when ``loss_model=None`` (backward compatibility), and for the
+        headspace roof when the loss model has no air-side temperature.
     loss_model : LossModel, optional
-        Loss model for wall heat-loss calculations.
-        Supported types include ``ConstantAmbientLoss`` and
-        ``GroundTemperatureLoss``. If ``None`` (default),
-        ``ConstantAmbientLoss`` is created from ``U_loss`` and
+        Loss model for wall heat-loss calculations
+        (``ConstantAmbientLoss``, ``SplitAmbientLoss``,
+        ``GroundTemperatureLoss``, ``TransientGroundLoss``). If ``None``
+        (default), ``ConstantAmbientLoss`` is created from ``U_loss`` and
         ``T_ambient`` (backward compatibility).
 
     Examples
@@ -106,7 +107,13 @@ class StorageConfig:
     """Storage wall heat transfer coefficient [W/(m²·K)]."""
 
     T_ambient: float = 10.0
-    """Ambient temperature used for heat-loss calculation [°C]."""
+    """
+    Ambient temperature used for heat-loss calculation [°C].
+
+    Only used when ``loss_model=None`` and, with the headspace model, for
+    the roof if the loss model has no air-side temperature
+    (``GroundTemperatureLoss``). Per-step values: ``StorageInputs.T_ambient``.
+    """
 
     geometry: GeometryModel | None = field(default=None, repr=False)
     """
@@ -124,7 +131,9 @@ class StorageConfig:
     """
     Storage loss model.
 
-    Supported types: ``ConstantAmbientLoss``, ``GroundTemperatureLoss``.
+    Supported types: ``ConstantAmbientLoss``, ``SplitAmbientLoss``,
+    ``GroundTemperatureLoss``, ``TransientGroundLoss`` (its ground
+    temperatures are part of ``StorageState.loss_state``).
 
     If ``None`` (default), ``ConstantAmbientLoss`` is created from
     ``U_loss`` and ``T_ambient`` (backward compatibility).
@@ -301,7 +310,8 @@ class StorageConfig:
     ``True``
         Headspace enabled. The lid is then not part of the top node's loss
         area: the water surface loses heat to the lid only through the
-        headspace.
+        headspace. The roof sees ``StorageInputs.T_ambient`` if given, else
+        the air-side temperature of the loss model, else ``T_ambient``.
     """
 
     T_headspace_init: float = 99.0
@@ -326,7 +336,7 @@ class StorageConfig:
     Heat transfer coefficient of the storage roof [W/(m²·K)].
 
     Determines heat loss from headspace to ambient:
-    ``Q_roof = U_roof · A_lid · (T_hs - T_ambient)``.
+    ``Q_roof = U_roof · A_lid · (T_hs - T_roof)``.
     Only relevant when ``headspace=True``. Default: 0.2 W/(m²·K).
     """
 
