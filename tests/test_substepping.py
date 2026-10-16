@@ -79,3 +79,59 @@ def test_autosubstep_advances_full_dt(make_storage):
     state = storage.initialize(T_init=60.0, time=0.0)
     out = storage.step(state, dt=3600.0, inputs=_cfl_violating_inputs())
     assert out.state.time == pytest.approx(3600.0)
+
+
+# ---------------------------------------------------------------------------
+# Conduction (Fourier) limit
+# ---------------------------------------------------------------------------
+# Explicit Euler with upwind advection and central conduction keeps the old
+# node temperature with weight 1 - CFL - Fo (Fo = dt·(K_above+K_below)/C);
+# for Fo > 1 it overshoots. Before, only the CFL number was sub-stepped, so
+# an idle tank on a fine grid with high lambda_eff_factor was integrated
+# with Fo ≈ 48: 23 K off after 100 min, hidden by the buoyancy correction.
+
+
+def _fine_grid(make_storage, solver, **kw):
+    return make_storage(volume=1.0, height=1.0, n_nodes=50, lambda_eff_factor=100.0,
+                        U_loss=0.0, solver=solver, **kw)
+
+
+def test_conduction_limit_is_sub_stepped(make_storage):
+    T0 = np.where(np.arange(50) < 25, 80.0, 20.0)
+    storage = _fine_grid(make_storage, "explicit")
+    state = storage.initialize(T_init=T0)
+    assert storage._required_substeps(state, 600.0, []) > 1   # no flow at all
+
+    reference = _fine_grid(make_storage, "implicit")
+    ref_state = reference.initialize(T_init=T0)
+    for _ in range(10):
+        state = storage.step(state, dt=600.0, inputs=StorageInputs()).state
+    for _ in range(1000):
+        ref_state = reference.step(ref_state, dt=6.0, inputs=StorageInputs()).state
+    assert np.max(np.abs(state.temperatures - ref_state.temperatures)) < 0.1
+
+
+def test_conduction_limit_violation_warns_without_substeps(make_storage):
+    storage = _fine_grid(make_storage, "explicit", auto_substep=False)
+    state = storage.initialize(T_init=np.where(np.arange(50) < 25, 80.0, 20.0))
+    with pytest.warns(RuntimeWarning, match="stability limit"):
+        storage.step(state, dt=600.0, inputs=StorageInputs())
+
+
+def test_advection_dominated_substep_count_is_unchanged(make_storage):
+    """Coarse grid: the conduction term stays far below the limit, so the
+    sub-step count is that of the CFL condition alone, as before."""
+    storage = make_storage(n_nodes=50, solver="explicit")
+    state = storage.initialize(T_init=60.0)
+    inputs = _cfl_violating_inputs()
+    F = storage._compute_inter_node_fluxes(inputs.ports)
+    cfl = np.max(np.abs(F)) / (977.8 * storage.A_cross) * 3600.0 / storage.dz
+    assert storage._required_substeps(state, 3600.0, inputs.ports) == int(np.ceil(cfl / 0.9))
+
+
+def test_substepped_end_time_is_exact(make_storage):
+    storage = make_storage(n_nodes=50, solver="explicit")
+    state = storage.initialize(T_init=60.0, time=0.1)
+    assert storage._required_substeps(state, 3600.0, _cfl_violating_inputs().ports) > 2
+    out = storage.step(state, dt=3600.0, inputs=_cfl_violating_inputs())
+    assert out.state.time == 0.1 + 3600.0

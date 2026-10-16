@@ -427,8 +427,9 @@ class ConfigPanel(QWidget):
         self.num_auto_substep = QCheckBox("Auto sub-stepping (explicit solver)")
         self.num_auto_substep.setChecked(True)
         self.num_auto_substep.setToolTip(
-            "If dt would violate the CFL condition, split it into the\n"
-            "smallest number of CFL-safe sub-steps automatically.\n"
+            "If dt would exceed the explicit stability limit (CFL,\n"
+            "conduction, heat exchanger), split it into the smallest\n"
+            "number of stable sub-steps automatically.\n"
             "Disable to reproduce the raw single-step behaviour\n"
             "(only a RuntimeWarning is raised on violation).\n"
             "Ignored by the implicit solver."

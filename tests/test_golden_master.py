@@ -1,8 +1,12 @@
 """
 Golden-master regression: one simulated year per configuration.
 
-The reference (``tests/golden/reference.npz``) was recorded from the solver
-*before* the step() performance work (see its ``git_commit`` metadata) and
+The reference (``tests/golden/reference.npz``) was first recorded from the
+solver *before* the step() performance work of v1.1.0 and re-recorded after
+the numerical fixes listed in CHANGELOG.md (explicit stability limit,
+implicit heat exchangers, exact headspace integration, energy-consistent
+outlet temperatures, SOC, applied ``Q_loss``); its ``git_commit`` metadata
+names the parent commit of the recorded code. It
 covers node counts 5/20/50, every geometry, loss model and fluid model,
 buoyancy on/off, the implicit/explicit x upwind/TVD variants, the presets and
 the port/diffusor/heat-exchanger/headspace paths (``tests/golden/scenarios.py``).
@@ -15,7 +19,9 @@ Two checks per scenario:
   temperatures) hash to the recorded SHA-256 digests, i.e. they are
   bit-identical. Only run on the platform the reference was recorded on:
   ``exp``/``pow`` from the platform math library may differ in the last ulp
-  elsewhere.
+  elsewhere. Scenarios solved with LAPACK (implicit heat exchangers) also
+  need the NumPy version of the reference. ``GOLDEN_BITWISE=0`` skips the
+  check (CI runners: other CPUs, other SIMD code paths).
 * ``test_golden_master_tolerance`` -- checkpoint values agree within
   ``RTOL`` relative deviation on every platform.
 
@@ -27,6 +33,7 @@ reference only from code whose results are to be preserved
 from __future__ import annotations
 
 import functools
+import os
 
 import numpy as np
 import pytest
@@ -59,6 +66,11 @@ def _reduced(sid: str) -> dict:
     return reduce_run(run_scenario(SCENARIOS[sid], _profile()))
 
 
+def _uses_lapack(sid: str) -> bool:
+    """Implicit heat exchangers are solved with np.linalg.solve (LAPACK)."""
+    return sid.startswith("impl") and "hx" in SCENARIOS[sid].extras
+
+
 def test_reference_covers_all_scenarios():
     assert set(META["digests"]) == set(SCENARIOS)
 
@@ -74,9 +86,14 @@ def test_golden_master_tolerance(sid):
 
 @pytest.mark.parametrize("sid", list(SCENARIOS))
 def test_golden_master_bitwise(sid):
+    if os.environ.get("GOLDEN_BITWISE", "1") == "0":
+        pytest.skip("bitwise comparison disabled (GOLDEN_BITWISE=0)")
     if platform_tag() != META["platform"]:
         pytest.skip(f"reference recorded on {META['platform']}, "
                     f"running on {platform_tag()}")
+    if _uses_lapack(sid) and np.__version__ != META["numpy"]:
+        pytest.skip(f"LAPACK results depend on the NumPy build (reference: "
+                    f"NumPy {META['numpy']}, running {np.__version__})")
     red = _reduced(sid)
     ref = META["digests"][sid]
     changed = [q for q in QUANTITIES if red[f"{q}.sha256"] != ref[q]]

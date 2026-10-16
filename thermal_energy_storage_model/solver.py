@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import warnings
 from collections.abc import Callable
 from itertools import accumulate
@@ -11,6 +12,7 @@ import numpy as np
 
 from ._kernels import (
     convective_adjustment,
+    implicit_coefficients,
     implicit_solve,
     solve_tdma,
     tvd_correction,
@@ -32,6 +34,15 @@ from .state import StorageInputs, StorageOutputs, StorageState
 # Largest grid for which WaterProperties are evaluated on Python floats
 # instead of NumPy arrays (measured break-even of the two, ~35-40 nodes).
 _SCALAR_FLUID_MAX_NODES: int = 32
+
+# Explicit solver limits per (sub-)step: Courant number <= _CFL_SAFETY (safety
+# margin of the advective CFL condition, also in max_stable_dt), and the
+# stability number (Courant number + conduction / heat-exchanger number,
+# see ThermalStorage1D._stability_numbers) <= _STABILITY_LIMIT.
+_CFL_SAFETY: float = 0.9
+_STABILITY_LIMIT: float = 1.0
+
+_HX_FLOW_DIRECTIONS = ("downward", "upward")
 
 
 class _FluidState:
@@ -70,69 +81,51 @@ class ThermalStorage1D:
     """
     1D model of a stratified hot-water thermal energy storage.
 
-    This model represents a cylindrical hot-water storage as a
-    one-dimensional layer stack. It is designed for use in
-    co-simulation environments with district-heating network solvers:
-    each timestep is computed individually, state is exchanged, and
-    network simulation outputs (mass flow rates, inlet temperatures)
-    are applied directly.
+    The storage is represented as a vertical stack of N layers (nodes) of a
+    cylindrical, truncated-cone or truncated-pyramid geometry. The model is
+    designed for co-simulation with district-heating network solvers: each
+    call of :meth:`step` advances one coupling interval from a given
+    :class:`StorageState` and the boundary conditions of that interval
+    (port mass flows and inlet temperatures, heat exchangers, ambient
+    temperature), and returns the outlet temperatures and the new state.
+    ``step()`` depends only on its arguments and the configuration, so any
+    state can be stepped again (rollback, iterative coupling).
 
     The model supports:
 
-        - **Simultaneous charging and discharging** via two separate
-            hydraulic loops (for example CHP feed-in + network supply)
-        - **Thermal stratification** through upwind discretization of the
-            advection term, preserving thermocline structure
-        - **Heat losses** through tank wall (shell + bottom + lid)
-        - **Heat conduction / diffusion** between neighboring layers with
-            effective thermal conductivity (including turbulent mixing)
-        - **CFL check** for numerical stability monitoring
+        - **Arbitrary hydraulic ports** at any height, simultaneous
+          charging and discharging, diffusor zones
+        - **Thermal stratification** with upwind or TVD (van Leer)
+          advection and buoyancy (convective adjustment)
+        - **Heat losses** through wall, lid and bottom (constant, split,
+          depth-dependent or transient ground loss models)
+        - **Heat conduction** between layers with an effective thermal
+          conductivity
+        - **Heat exchangers** (ε-NTU, lumped or segmented) and an optional
+          **headspace** above the water surface
+        - **Explicit or implicit** time integration; the explicit solver
+          sub-steps automatically to stay within its stability limit
 
     Physical model
     --------------
-    Energy balance for node i (i = 0 top, i = N-1 bottom):
+    Energy balance for node i (i = 0 top, i = N-1 bottom), with C_i the
+    node heat capacity:
 
-        m_k · c_p · dT_i/dt = Q_adv,i + Q_cond,i + Q_loss,i
+        C_i · dT_i/dt = Q_adv,i + Q_port,i + Q_cond,i + Q_loss,i + Q_hx,i
 
-    Advection term (upwind, net flow direction):
+    The port mass flows S_i (positive = inflow) define the flow across
+    interface j between nodes j-1 and j, F_j = S_0 + ... + S_{j-1}
+    (positive downward, F_0 = F_N = 0). Advection carries the upwind
+    temperature across each interface; inflow enters with its inlet
+    temperature, outflow leaves with the node temperature:
 
-        m_net = m_charge - m_discharge
+        Q_adv,i  = cp · (F_i · T_up,i − F_{i+1} · T_up,i+1)
+        Q_port,i = cp · (max(S_i, 0) · T_in,i + min(S_i, 0) · T_i)
+        Q_cond,i = K_{i-1} · (T_{i-1} − T_i) + K_i · (T_{i+1} − T_i)
 
-        Node 0 (top), m_net ≥ 0:
-            Q_adv,0 = m_charge · c_p · (T_charge_in - T_0)
-
-        Node 0 (top), m_net < 0:
-            Q_adv,0 = m_charge · c_p · T_charge_in
-                    + |m_net| · c_p · T_1
-                    - m_discharge · c_p · T_0
-
-        Interior node i, m_net > 0 (downward):
-            Q_adv,i = m_net · c_p · (T_{i-1} - T_i)
-
-        Interior node i, m_net < 0 (upward):
-            Q_adv,i = |m_net| · c_p · (T_{i+1} - T_i)
-
-        Node N-1 (bottom), m_net ≥ 0:
-            Q_adv,N-1 = m_net · c_p · T_{N-2}
-                      + m_discharge · c_p · T_discharge_in
-                      - m_charge · c_p · T_{N-1}
-
-        Node N-1 (bottom), m_net < 0:
-            Q_adv,N-1 = m_discharge · c_p · (T_discharge_in - T_{N-1})
-
-    Conduction term:
-
-        Q_cond,i = K_cond · (T_{i-1} - T_i) + K_cond · (T_{i+1} - T_i)
-        K_cond = λ_eff · A / Δz       [W/K]
-        λ_eff = lambda_eff_factor · lambda_fluid
-
-    Loss term:
-
-        Q_loss,i = U_loss · A_wall,i · (T_ambient - T_i)
-
-    Time integration (explicit Euler):
-
-        T_i(t + Δt) = T_i(t) + Δt · dT_i/dt
+    with K_j = λ_eff · A_j / Δz and λ_eff = lambda_eff_factor · lambda_fluid.
+    See ``docs/physics.md`` for the TVD correction, the loss models, heat
+    exchangers and the headspace.
 
     Parameters
     ----------
@@ -151,18 +144,20 @@ class ThermalStorage1D:
         >>> config = StorageConfig(volume=100.0, height=10.0, n_nodes=20)
         >>> storage = ThermalStorage1D(config)
         >>> state = storage.initialize(T_init=70.0)
-        >>> inputs = StorageInputs(
+        >>> inputs = StorageInputs.two_port(
         ...     m_dot_charge=6.0, T_charge_in=90.0,
-        ...     m_dot_discharge=4.0, T_discharge_in=50.0
+        ...     m_dot_discharge=4.0, T_discharge_in=50.0,
+        ...     height=config.height,
         ... )
         >>> outputs = storage.step(state, dt=60.0, inputs=inputs)
-        >>> print(f"Vorlauf: {outputs.T_discharge_out:.1f} °C")
-        >>> print(f"Charge return: {outputs.T_charge_out:.1f} °C")
+        >>> T_supply = outputs.port_temperatures[3]   # discharge_out (top)
+        >>> T_return = outputs.port_temperatures[1]   # charge_out (bottom)
 
-    Querying the optimal timestep size:
+    Querying the largest timestep allowed by the CFL condition:
 
         >>> dt_max = storage.max_stable_dt(m_dot_max=10.0)
-        >>> print(f"Recommended max timestep size: {dt_max:.0f} s")
+        >>> print(f"CFL-limited timestep: {dt_max:.0f} s")
+        CFL-limited timestep: 440 s
     """
 
     def __init__(self, config: StorageConfig) -> None:
@@ -214,14 +209,14 @@ class ThermalStorage1D:
 
         Examples
         --------
-        Freistehender Stahltank:
+        Above-ground steel tank:
 
             >>> tes = ThermalStorage1D.from_preset(
             ...     "steel_tank_aboveground",
             ...     volume=500.0, height=15.0,
             ... )
 
-        Erdbeckenspeicher:
+        Pit thermal energy storage:
 
             >>> tes = ThermalStorage1D.from_preset(
             ...     "ptes",
@@ -253,30 +248,57 @@ class ThermalStorage1D:
     def _validate_config(self) -> None:
         """Validate configuration parameters for physical plausibility."""
         cfg = self.config
-        if cfg.volume <= 0:
+        # "not x > 0" instead of "x <= 0" also rejects NaN.
+        if not cfg.volume > 0:
             raise ValueError(f"volume must be positive, but is {cfg.volume}.")
-        if cfg.height <= 0:
+        if not cfg.height > 0:
             raise ValueError(f"height must be positive, but is {cfg.height}.")
+        if isinstance(cfg.n_nodes, bool) or not isinstance(cfg.n_nodes, (int, np.integer)):
+            raise TypeError(
+                f"n_nodes must be an integer, but is {cfg.n_nodes!r}."
+            )
         if cfg.n_nodes < 2:
             raise ValueError(
                 f"n_nodes must be at least 2, but is {cfg.n_nodes}."
             )
-        if cfg.rho <= 0:
+        if not cfg.rho > 0:
             raise ValueError(f"rho must be positive, but is {cfg.rho}.")
-        if cfg.cp <= 0:
+        if not cfg.cp > 0:
             raise ValueError(f"cp must be positive, but is {cfg.cp}.")
-        if cfg.lambda_fluid <= 0:
+        if not cfg.lambda_fluid > 0:
             raise ValueError(
                 f"lambda_fluid must be positive, but is {cfg.lambda_fluid}."
             )
-        if cfg.lambda_eff_factor < 1.0:
+        if not cfg.lambda_eff_factor >= 1.0:
             raise ValueError(
                 f"lambda_eff_factor must be >= 1, but is {cfg.lambda_eff_factor}."
             )
-        if cfg.U_loss < 0:
+        if not cfg.U_loss >= 0:
             raise ValueError(
                 f"U_loss must be >= 0, but is {cfg.U_loss}."
             )
+        if not math.isfinite(cfg.T_ambient):
+            raise ValueError(f"T_ambient must be finite, but is {cfg.T_ambient}.")
+        if cfg.T_ground is not None:
+            if not math.isfinite(cfg.T_ground):
+                raise ValueError(f"T_ground must be finite, but is {cfg.T_ground}.")
+            if not cfg.z_ground_layer > 0:
+                raise ValueError(
+                    f"z_ground_layer must be positive, but is {cfg.z_ground_layer}."
+                )
+        if cfg.headspace:
+            for name in ("H_headspace", "rho_headspace", "cp_headspace"):
+                value = getattr(cfg, name)
+                if not value > 0:
+                    raise ValueError(f"{name} must be positive, but is {value}.")
+            for name in ("U_roof", "h_headspace_water"):
+                value = getattr(cfg, name)
+                if not value >= 0:
+                    raise ValueError(f"{name} must be >= 0, but is {value}.")
+            if not math.isfinite(cfg.T_headspace_init):
+                raise ValueError(
+                    f"T_headspace_init must be finite, but is {cfg.T_headspace_init}."
+                )
         if cfg.geometry is not None and not isinstance(cfg.geometry, GeometryModel):
             raise ValueError(
                 "geometry must be an instance of GeometryModel."
@@ -338,8 +360,15 @@ class ThermalStorage1D:
         # (conservative: highest flow velocity)
         self.A_cross: float = float(np.min(self._A_cross_nodes))
 
-        # Wall area per node [m²]
+        # Lid area [m²]: top cross-section of the geometry
+        self._A_lid: float = float(geom.A_cross(geom.height))
+
+        # Wall area per node [m²]. With the headspace model, the water surface
+        # is not in contact with the lid: the lid path runs through the
+        # headspace (U_roof), so the lid is not part of the top node's loss area.
         self.A_wall: np.ndarray = geom.A_wall_nodes(n)
+        if cfg.headspace:
+            self.A_wall[0] = max(float(self.A_wall[0]) - self._A_lid, 0.0)
 
         # Effective thermal conductivity
         self._lambda_eff: float = cfg.lambda_fluid * cfg.lambda_eff_factor
@@ -394,36 +423,28 @@ class ThermalStorage1D:
         # whose mapping depends only on the port height (see _port_weights).
         self._port_weight_cache: dict = {}
 
-        # Total nominal heat capacity [J/K] (E_max in get_soc)
-        self._C_total: float = float(np.sum(self._C_nodes))
-
-        # Per-step caches (see _fluid_state / _conduction_coefficients)
+        # Per-step caches (see _fluid_state / _conduction_coefficients /
+        # _full_charge_capacity)
         self._fluid_cache: tuple | None = None
         self._fluid_const_cache: tuple | None = None
         self._K_cond_cache: tuple = (None, [])
+        self._soc_cache: tuple | None = None
 
-        # Loss models that keep the base-class advance() are steady-state:
-        # their wall heat flow does not change when advance() is called.
-        self._loss_model_is_steady: bool = (
-            type(self._loss_model).advance is LossModel.advance
-        )
+        # Loss-model kind:
+        #   "steady"   no internal state (base-class advance())
+        #   "stateful" internal state in StorageState.loss_state
+        #   "legacy"   advance() keeps the state inside the model object
+        #              (former interface for custom models, see LossModel)
+        loss_type = type(self._loss_model)
+        if self._loss_model.initial_state(n) is not None:
+            self._loss_kind = "stateful"
+        elif loss_type.advance is LossModel.advance:
+            self._loss_kind = "steady"
+        else:
+            self._loss_kind = "legacy"
 
         # Unbalanced port mass flows are reported once per storage (see step())
         self._mass_balance_warned: bool = False
-
-    def _compute_wall_areas(self) -> np.ndarray:
-        """
-        Compute wall area for each node.
-
-        Delegates to the geometry model. No longer called internally by
-        _precompute_geometry (kept for backward compatibility).
-
-        Returns
-        -------
-        numpy.ndarray
-            Wall areas [m²], shape (n_nodes,).
-        """
-        return self._geom.A_wall_nodes(self.n)
 
     # ------------------------------------------------------------------
     # Public initialization method
@@ -451,24 +472,28 @@ class ThermalStorage1D:
         Returns
         -------
         StorageState
-            Initial storage state.
+            Initial storage state, including the initial headspace
+            temperature and loss-model state (e.g. ground temperatures).
 
         Raises
         ------
         ValueError
-            If `T_init` has wrong array length.
+            If `T_init` has wrong array length or non-finite values.
 
         Examples
         --------
         Uniform initial profile:
 
+            >>> storage = ThermalStorage1D(StorageConfig(volume=100.0, height=10.0))
             >>> state = storage.initialize(T_init=70.0)
 
         Linear stratified profile (80 °C top, 40 °C bottom):
 
             >>> import numpy as np
-            >>> T_profile = np.linspace(80.0, 40.0, config.n_nodes)
+            >>> T_profile = np.linspace(80.0, 40.0, storage.n)
             >>> state = storage.initialize(T_init=T_profile)
+            >>> state.T_top, state.T_bottom
+            (80.0, 40.0)
         """
         if np.isscalar(T_init):
             # np.isscalar() isn't a type guard mypy understands, so T_init's
@@ -482,6 +507,8 @@ class ThermalStorage1D:
                     f"T_init array must have length n_nodes={self.n}, "
                     f"but has shape {temps.shape}."
                 )
+        if not np.all(np.isfinite(temps)):
+            raise ValueError("T_init must be finite.")
 
         # Optional bottom-zone correction: linear gradient from T_ground (z=0)
         # to regular profile value at z=z_ground_layer.
@@ -496,7 +523,12 @@ class ThermalStorage1D:
                     temps[i] = T_g * (1.0 - frac) + temps[i] * frac
 
         T_hs = self.config.T_headspace_init if self.config.headspace else None
-        return StorageState(temperatures=temps, time=float(time), T_headspace=T_hs)
+        return StorageState(
+            temperatures=temps,
+            time=float(time),
+            T_headspace=T_hs,
+            loss_state=self._loss_model.initial_state(self.n),
+        )
 
     # ------------------------------------------------------------------
     # Information methods
@@ -528,7 +560,12 @@ class ThermalStorage1D:
         temperature (for example 50 °C).
 
         For temperature-dependent fluid properties:
-        E = Σ_k ρ(T_k) · V_k · cp(T_k) · (T_k − T_ref) is computed.
+        E = Σ_k ρ(T_k) · V_k · cp(T_k) · (T_k − T_ref) is computed. This is
+        an approximation: the fixed node volumes hold a temperature-dependent
+        mass, while the port mass flows are balanced, and advection uses the
+        profile-mean cp. Changes of E then match the port enthalpy flows only
+        within a few percent of the throughput (exact for constant
+        properties); see ``docs/physics.md``.
         """
         T = np.asarray(state.temperatures)
         C_nodes = self._fluid_state(T).C_array
@@ -561,19 +598,50 @@ class ThermalStorage1D:
         ------
         ValueError
             If T_max <= T_min.
+
+        Notes
+        -----
+        SOC = E(T) / E_full with :meth:`get_stored_energy` relative to
+        ``T_min``; ``E_full`` is the stored energy of the tank uniformly at
+        ``T_max``, evaluated with the fluid properties at ``T_max``, so a
+        tank uniformly at ``T_max`` has SOC = 1 also for temperature-dependent
+        properties.
         """
         if T_max <= T_min:
             raise ValueError(
                 f"T_max ({T_max}) must be greater than T_min ({T_min})."
             )
         E_current = self.get_stored_energy(state, T_ref=T_min)
-        E_max = self._C_total * (T_max - T_min)
+        E_max = self._full_charge_capacity(T_max) * (T_max - T_min)
         # Same result as float(np.clip(x, 0.0, 1.0)), incl. NaN and -0.0
         return float(min(max(E_current / E_max, 0.0), 1.0))
 
+    def _full_charge_capacity(self, T_max: float) -> float:
+        """
+        Heat capacity Σ ρ(T_max)·V_k·cp(T_max) of the tank at ``T_max`` [J/K].
+
+        Cached for the most recent ``T_max`` (``get_soc`` is typically
+        called with fixed limits every step). The fluid model is evaluated
+        directly, not through :meth:`_fluid_state`, whose cache serves the
+        temperature profile of the next step.
+        """
+        cached = self._soc_cache
+        if cached is not None and cached[0] == T_max and cached[1] is self._fluid:
+            return cached[2]
+        rho = float(self._fluid.rho(T_max))
+        cp = float(self._fluid.cp(T_max))
+        capacity = float(np.add.reduce((rho * self._V_nodes) * cp, axis=None))
+        self._soc_cache = (T_max, self._fluid, capacity)
+        return capacity
+
     def max_stable_dt(self, m_dot_max: float) -> float:
         """
-        Compute the maximum stable timestep (CFL condition).
+        Compute the largest timestep allowed by the advective CFL condition.
+
+        The explicit solver additionally respects the stability limit of
+        conduction, heat exchangers and the headspace coupling; with
+        ``auto_substep=True`` (default) it sub-steps automatically, so this
+        value is informational. The implicit solver has no such limit.
 
         Parameters
         ----------
@@ -636,25 +704,40 @@ class ThermalStorage1D:
         Perform one storage timestep over the external timestep ``dt``.
 
         For ``solver="explicit"`` with ``auto_substep=True`` (default), the
-        step is automatically split into CFL-stable sub-steps whenever ``dt``
-        would violate the CFL condition; the returned state still advances by
+        step is automatically split into equal sub-steps whenever ``dt``
+        would exceed the stability limit of the explicit scheme (advective
+        CFL condition plus conduction, heat-exchanger and headspace coupling,
+        see :meth:`_stability_numbers`); the returned state still advances by
         the full ``dt``. Outlet quantities (``port_temperatures``,
         ``hx_outlet_temperatures``) and ``Q_loss`` are returned as the mean
         over the sub-steps, which represents the external interval more
         faithfully than a single start-of-step evaluation. In all other cases
-        (implicit solver, CFL already satisfied, or ``auto_substep=False``) a
-        single step is taken.
+        (implicit solver, limit already satisfied, or ``auto_substep=False``)
+        a single step is taken.
+
+        ``step()`` reads only ``state``, ``dt``, ``inputs`` and the
+        configuration and does not modify ``state``, so the same state can be
+        stepped again (rollback, iterative coupling).
 
         See :meth:`_step_single` for the full description of the numerical
         scheme, parameters and outputs.
+
+        Raises
+        ------
+        ValueError
+            If ``dt`` is not positive and finite, the state does not match
+            the storage, or an input is not finite or out of range.
         """
+        self._validate_inputs(state, dt, inputs)
         cfg = self.config
         if not (cfg.solver == "explicit" and cfg.auto_substep):
             return self._step_single(state, dt, inputs)
 
-        n_sub = self._required_substeps(state, dt, inputs.ports)
+        # The sub-step count keeps every sub-step within the stability limit;
+        # _step_single need not check it again.
+        n_sub = self._required_substeps(state, dt, inputs.ports, inputs.hx_ports)
         if n_sub <= 1:
-            return self._step_single(state, dt, inputs)
+            return self._step_single(state, dt, inputs, check_stability=False)
 
         dt_sub = dt / n_sub
         cur = state
@@ -662,7 +745,7 @@ class ThermalStorage1D:
         hx_sum: np.ndarray | None = None
         q_loss_sum = 0.0
         for _ in range(n_sub):
-            out = self._step_single(cur, dt_sub, inputs)
+            out = self._step_single(cur, dt_sub, inputs, check_stability=False)
             cur = out.state
             pt = np.asarray(out.port_temperatures, dtype=float)
             pt_sum = pt if pt_sum is None else pt_sum + pt
@@ -677,6 +760,8 @@ class ThermalStorage1D:
         hx_outlet_temperatures = (
             [float(x) for x in (hx_sum / n_sub)] if hx_sum is not None else []
         )
+        # End time without the rounding of n_sub additions of dt_sub
+        cur.time = state.time + dt
         return StorageOutputs(
             port_temperatures=port_temperatures,
             Q_loss=q_loss_sum / n_sub,
@@ -685,82 +770,187 @@ class ThermalStorage1D:
             T_headspace=cur.T_headspace,
         )
 
+    def _validate_inputs(
+        self,
+        state: StorageState,
+        dt: float,
+        inputs: StorageInputs,
+    ) -> None:
+        """Reject a timestep, state or boundary condition the model cannot use."""
+        if not (dt > 0.0 and math.isfinite(dt)):
+            raise ValueError(f"dt must be positive and finite, but is {dt}.")
+        if state.temperatures.shape != (self.n,):
+            raise ValueError(
+                f"state.temperatures must have shape ({self.n},), "
+                f"but has shape {state.temperatures.shape}."
+            )
+        isfinite = math.isfinite
+        for i, port in enumerate(inputs.ports):
+            # One check per port in the common case: NaN/inf propagate
+            # through the sum (inf - inf = NaN).
+            m_dot = port.m_dot
+            if isfinite(port.z + m_dot + (port.T_in if m_dot > 0.0 else 0.0)):
+                continue
+            if not (isfinite(port.z) and isfinite(m_dot)):
+                raise ValueError(
+                    f"Port {i} ({port.label!r}): z and m_dot must be finite, "
+                    f"but are z={port.z}, m_dot={m_dot}."
+                )
+            raise ValueError(
+                f"Port {i} ({port.label!r}): T_in of an inlet must be "
+                f"finite, but is {port.T_in}."
+            )
+        for i, hx in enumerate(inputs.hx_ports):
+            values = (hx.z, hx.H_hx, hx.UA, hx.m_dot_ext, hx.T_ext_in, hx.cp_ext)
+            if not all(math.isfinite(v) for v in values):
+                raise ValueError(
+                    f"Heat exchanger {i} ({hx.label!r}): all values must be finite."
+                )
+            if hx.H_hx < 0.0 or hx.UA < 0.0 or hx.m_dot_ext < 0.0:
+                raise ValueError(
+                    f"Heat exchanger {i} ({hx.label!r}): H_hx, UA and m_dot_ext "
+                    f"must be >= 0, but are {hx.H_hx}, {hx.UA}, {hx.m_dot_ext}."
+                )
+            if not hx.cp_ext > 0.0:
+                raise ValueError(
+                    f"Heat exchanger {i} ({hx.label!r}): cp_ext must be positive, "
+                    f"but is {hx.cp_ext}."
+                )
+            if hx.flow_direction not in _HX_FLOW_DIRECTIONS:
+                raise ValueError(
+                    f"Heat exchanger {i} ({hx.label!r}): flow_direction must be "
+                    f"'downward' or 'upward', but is {hx.flow_direction!r}."
+                )
+        if inputs.T_ambient is not None and not math.isfinite(inputs.T_ambient):
+            raise ValueError(f"T_ambient must be finite, but is {inputs.T_ambient}.")
+
     def _required_substeps(
         self,
         state: StorageState,
         dt: float,
         ports: list,
+        hx_ports: list | tuple = (),
     ) -> int:
         """
-        Number of CFL-stable explicit sub-steps for external timestep ``dt``.
+        Number of stable explicit sub-steps for external timestep ``dt``.
 
-        Returns 1 when a single explicit step already satisfies the CFL
-        condition (or when there is no flow). Otherwise returns the smallest
-        ``n`` such that each sub-step ``dt/n`` keeps the Courant number at or
-        below the 0.9 safety margin also used by :meth:`max_stable_dt`.
+        The smallest ``n`` such that each sub-step ``dt/n`` keeps the Courant
+        number at or below the safety margin 0.9 (also used by
+        :meth:`max_stable_dt`) and the stability number of
+        :meth:`_stability_numbers` at or below 1; 1 if a single step already
+        does. Both numbers scale linearly with ``dt``.
         """
-        F = self._compute_inter_node_fluxes(ports)
-        m_for_cfl = float(np.max(np.abs(F)))
-        if m_for_cfl <= 0.0:
-            return 1
-        rho = float(np.min(np.asarray(
-            self._fluid.rho(state.temperatures), dtype=float
-        )))
-        cfl_val = (m_for_cfl / (rho * self.A_cross)) * dt / self.dz
-        if cfl_val <= 0.9:
-            return 1
-        return int(np.ceil(cfl_val / 0.9))
+        T = state.temperatures
+        F_list = self._port_flows(ports)[1]
+        fluid = self._fluid_state(T)
+        K = self._conduction_coefficients(self._lambda_eff_at(T))
+        headspace = self.config.headspace and state.T_headspace is not None
+        cfl, number = self._stability_numbers(dt, F_list, fluid, K, hx_ports, headspace)
+        n_sub = 1
+        if cfl > _CFL_SAFETY:
+            n_sub = int(np.ceil(cfl / _CFL_SAFETY))
+        if number > _STABILITY_LIMIT * n_sub:
+            n_sub = int(np.ceil(number / _STABILITY_LIMIT))
+        return n_sub
+
+    def _stability_numbers(
+        self,
+        dt: float,
+        F_list: list[float],
+        fluid: _FluidState,
+        K: list[float],
+        hx_ports: list | tuple,
+        headspace: bool,
+    ) -> tuple[float, float]:
+        """
+        Courant number and stability number of one explicit step ``dt``.
+
+        The explicit update of node i keeps its old temperature with weight
+        ``1 − dt·D_i/C_i``, where ``D_i`` sums the advective outflow
+        ``cp·|F|``, the conductances ``K`` to both neighbours and the
+        heat-exchanger and headspace conductances acting on the node. The
+        step is stable and free of overshoot while that weight is >= 0.
+        Returned are
+
+        - the Courant number ``CFL = |F|_max · dt / (ρ_min · A_min · Δz)``
+          (as before: conservative over all interfaces), and
+        - ``CFL + dt · max_i (K_{i-1} + K_i + G_hx,i + G_hs,i) / C_i``.
+        """
+        cfl = 0.0
+        m_for_cfl = max(map(abs, F_list))
+        if m_for_cfl > 0.0:
+            rho_min = float(np.asarray(fluid.rho).min())
+            cfl = (m_for_cfl / (rho_min * self.A_cross)) * dt / self.dz
+
+        G = [k_above + k_below for k_above, k_below in zip([0.0, *K], [*K, 0.0])]
+        for hx in hx_ports:
+            for k, g in self._hx_conductances(hx):
+                G[k] += g
+        if headspace:
+            G[0] += self.config.h_headspace_water * self._A_lid
+        diffusion = max(g / C for g, C in zip(G, fluid.C_list))
+        return cfl, cfl + dt * diffusion
 
     def _step_single(
         self,
         state: StorageState,
         dt: float,
         inputs: StorageInputs,
+        check_stability: bool = True,
     ) -> StorageOutputs:
         """
         Perform one storage simulation timestep.
 
-        This is the model core method. It implements an
-        explicit Euler step with upwind discretization and is intended
-        for direct coupling with a network simulation:
+        This is the model core method, intended for direct coupling with a
+        network simulation:
 
-          1. Outlet temperatures are evaluated from current state
-              (returned to network simulation).
-          2. Energy balances of all nodes are computed.
-          3. New state at timestep end is determined.
+          1. Port flows, fluid properties, losses and source terms are
+             evaluated from the current state.
+          2. The energy balances of all nodes are integrated over ``dt``
+             (explicit or implicit Euler, see ``StorageConfig.solver``),
+             followed by the buoyancy correction.
+          3. Outlet temperatures, heat-exchanger outlet temperatures, the
+             heat loss and the new state (including headspace and loss-model
+             state) are returned.
 
         Parameters
         ----------
         state : StorageState
             Current storage state (temperature profile + timestamp).
         dt : float
-            Timestep size [s]. Must satisfy CFL condition.
-            Recommended: <= max_stable_dt(m_dot_max).
+            Timestep size [s]. The explicit solver is stable only within the
+            limit of :meth:`_stability_numbers`; :meth:`step` sub-steps.
         inputs : StorageInputs
             Boundary conditions for this timestep:
             mass flow rates and inlet temperatures of all loops.
+        check_stability : bool, optional
+            Warn if an explicit step exceeds the stability limit. ``False``
+            when :meth:`step` has chosen the sub-step count. Default: True.
 
         Returns
         -------
         StorageOutputs
             Contains:
-            - ``port_temperatures``: node temperatures at each port [°C]
+            - ``port_temperatures``: port temperatures [°C] (outlet
+              temperature for outlet ports)
             - ``Q_loss``: wall heat loss [W]
             - ``state``: new storage state
 
         RuntimeWarning
-            If the CFL condition is violated (numerically unstable).
+            If the explicit stability limit is exceeded (numerically unstable).
 
         Notes
         -----
-        **Outlet temperatures:** Upwind principle - outlet temperature
-        of an outlet port equals the node temperature at the port height
-        at the beginning of the timestep.
+        **Outlet temperatures:** an outlet port returns the temperature at
+        which the fluid leaves: the node temperature at the beginning of the
+        step (explicit solver) or at its end (implicit solver, before the
+        buoyancy correction), mixed with the fluid of an inlet at the same
+        node (see :meth:`_port_temperatures`). The outputs therefore close
+        the energy balance of the step (see :class:`StorageOutputs`).
 
-        **Heat flow** at port i (for external calculation):
-
-            Inlet (m_dot > 0): Q = m_dot · cp · (T_in − port_temperatures[i])
-            Outlet (m_dot < 0): Q = |m_dot| · cp · port_temperatures[i]
+        **Heat exchangers** are part of the implicit system with the implicit
+        solver (no overshoot for any ``dt``); the explicit solver evaluates
+        them at the start of each sub-step.
 
         **Mass balance:** Sum of all port ``m_dot`` values must be zero.
         An imbalance above 1e-6 of the largest port flow raises a
@@ -772,6 +962,8 @@ class ThermalStorage1D:
         --------
         Single timestep in simultaneous operation:
 
+            >>> config = StorageConfig(volume=100.0, height=10.0)
+            >>> storage = ThermalStorage1D(config)
             >>> state = storage.initialize(80.0)
             >>> inputs = StorageInputs.two_port(
             ...     m_dot_charge=5.0, T_charge_in=90.0,
@@ -781,21 +973,22 @@ class ThermalStorage1D:
             >>> out = storage.step(state, dt=60.0, inputs=inputs)
             >>> new_state = out.state  # pass to next step
 
-        Time loop for co-simulation:
+        Time loop for co-simulation (``get_network_inputs`` and
+        ``send_to_network`` stand for the network side)::
 
-            >>> state = storage.initialize(70.0)
-            >>> for t in range(0, 3600, 60):
-            ...     inputs = get_network_inputs(t)        # from network solver
-            ...     outputs = storage.step(state, dt=60.0, inputs=inputs)
-            ...     state = outputs.state
-            ...     send_to_network(outputs)              # to network solver
+            state = storage.initialize(70.0)
+            for t in range(0, 3600, 60):
+                inputs = get_network_inputs(t)        # from network solver
+                outputs = storage.step(state, dt=60.0, inputs=inputs)
+                state = outputs.state
+                send_to_network(outputs)              # to network solver
         """
         cfg = self.config
         T = state.temperatures.copy()
         n = self.n
 
         # --- Port-based mass flows and source terms ---
-        S_list, F_list, T_src_nodes, port_weights, port_nodes = (
+        S_list, F_list, T_src_nodes, port_weights, port_nodes, S_in = (
             self._port_flows(inputs.ports)
         )
         T_list = T.tolist()
@@ -811,9 +1004,7 @@ class ThermalStorage1D:
         # not node-wise. Over a typical 20-90 °C TES operating range the error is
         # usually < 10 %; for strongly temperature-dependent fluids consider
         # node-wise evaluation. The advection cp above is treated the same way.
-        T_mean = float(np.add.reduce(T, axis=None)) / T.size   # == T.mean()
-        lambda_eff_T = float(self._fluid.lambda_fluid(T_mean)) * cfg.lambda_eff_factor
-        K_cond_iface_T = self._conduction_coefficients(lambda_eff_T)
+        K_cond_iface_T = self._conduction_coefficients(self._lambda_eff_at(T))
 
         # --- Mass-balance sanity check ---
         # A fixed-volume tank requires sum(port.m_dot) == 0 (incompressibility);
@@ -839,55 +1030,47 @@ class ThermalStorage1D:
                     stacklevel=2,
                 )
 
-        # --- CFL check (explicit solver): maximum absolute interface flow ---
-        if cfg.solver == "explicit":
-            m_for_cfl = max(map(abs, F_list))
-            if m_for_cfl > 0.0:
-                rho_min = float(np.asarray(fluid.rho).min())
-                cfl_val = (m_for_cfl / (rho_min * self.A_cross)) * dt / self.dz
-                if cfl_val > 1.0:
-                    warnings.warn(
-                        f"CFL condition violated (CFL = {cfl_val:.2f} > 1). "
-                        f"dt={dt} s, ṁ_max={m_for_cfl:.2f} kg/s. "
-                        "Solution may be numerically unstable.",
-                        RuntimeWarning,
-                        stacklevel=2,
-                    )
+        headspace = cfg.headspace and state.T_headspace is not None
 
-        # --- Port outlet temperatures (from current state) ---
-        # For outlet ports this is the mass-flow-weighted node temperature
-        # in the diffusor zone (for PointDiffusor: exactly one node).
-        # Summed sequentially on purpose: Python >= 3.12 sum() compensates
-        # float rounding, which would change multi-node results.
-        port_temperatures = []
-        for weights in port_weights:
-            T_port = 0.0
-            for k, w in weights:
-                T_port += w * T_list[k]
-            port_temperatures.append(T_port)
-
-        # --- Heat-exchanger source terms (epsilon-NTU, explicitly linearized) ---
-        # None stands for all-zero terms (no HX port, no headspace).
-        Q_hx_nodes: np.ndarray | None = None
-        hx_outlet_temperatures: list = []
-        if inputs.hx_ports:
-            Q_hx_nodes, hx_outlet_temperatures = self._compute_hx_source_terms(
-                T, inputs.hx_ports
+        # --- Stability check (explicit solver) ---
+        if cfg.solver == "explicit" and check_stability:
+            cfl, number = self._stability_numbers(
+                dt, F_list, fluid, K_cond_iface_T, inputs.hx_ports, headspace
             )
+            if number > _STABILITY_LIMIT:
+                warnings.warn(
+                    f"Explicit stability limit violated (CFL = {cfl:.2f}, "
+                    f"CFL + conduction/heat-exchanger number = {number:.2f} > 1). "
+                    f"dt={dt} s. Solution may be numerically unstable; use "
+                    "auto_substep=True or solver='implicit'.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+
+        # --- Boundary conditions of this step ---
+        loss_model = (
+            self._loss_model if inputs.T_ambient is None
+            else self._loss_model.with_air_temperature(inputs.T_ambient)
+        )
+        loss_state = state.loss_state
+        if self._loss_kind == "stateful" and loss_state is None:
+            loss_state = loss_model.initial_state(n)
 
         # --- Headspace heat exchange (if enabled) ---
+        # Integrated exactly over dt for the start-of-step top temperature;
+        # the step-mean heat flow enters the top node.
+        Q_hs: float | None = None
         T_hs_new = state.T_headspace
-        if cfg.headspace and state.T_headspace is not None:
+        if headspace:
             Q_hs, T_hs_new = self._compute_headspace_exchange(
-                state.T_headspace, T[0], dt
+                cast(float, state.T_headspace), T_list[0], dt,
+                self._roof_temperature(inputs, loss_model),
             )
-            if Q_hx_nodes is None:
-                Q_hx_nodes = np.zeros(n)
-            Q_hx_nodes[0] += Q_hs   # top node receives headspace heat
 
         # --- Heat losses at T_old (explicitly linearized) ---
-        Q_loss_nodes = self._compute_losses(T)
+        Q_loss_nodes = self._compute_losses(T, loss_model, loss_state)
 
+        hx_outlet_temperatures: list = []
         if cfg.solver == "implicit":
             # --- Fully implicit Euler step (TDMA), optional deferred TVD ---
             tvd_flux = None
@@ -895,14 +1078,37 @@ class ThermalStorage1D:
                 tvd_flux = tvd_fluxes(
                     T_list, F_list[1:-1], cp_mean, dt, self._tvd_denominator
                 )
-            T_new = self._step_implicit(
+            Q_src: list[float] | None = None
+            if Q_hs is not None:
+                Q_src = [0.0] * n
+                Q_src[0] += Q_hs   # top node receives headspace heat
+            args = (
                 T_list, dt, F_list, S_list, T_src_nodes, port_nodes,
                 fluid.C_list, K_cond_iface_T, cp_mean,
-                self._node_list(Q_loss_nodes),
-                None if Q_hx_nodes is None else Q_hx_nodes.tolist(),
-                tvd_flux,
+                self._node_list(Q_loss_nodes), Q_src, tvd_flux,
             )
+            if any(hx.m_dot_ext * hx.cp_ext > 0.0 for hx in inputs.hx_ports):
+                T_new, hx_outlet_temperatures = self._step_implicit_hx(
+                    *args, hx_ports=inputs.hx_ports
+                )
+            else:
+                T_new = self._step_implicit(*args)
+                hx_outlet_temperatures = [float(hx.T_ext_in) for hx in inputs.hx_ports]
+            # Outflow leaves at the new temperature (implicit outlet term)
+            T_out = T_new
         else:
+            # --- Heat-exchanger source terms (epsilon-NTU, explicit) ---
+            # None stands for all-zero terms (no HX port, no headspace).
+            Q_hx_nodes: np.ndarray | None = None
+            if inputs.hx_ports:
+                Q_hx_nodes, hx_outlet_temperatures = self._compute_hx_source_terms(
+                    T, inputs.hx_ports
+                )
+            if Q_hs is not None:
+                if Q_hx_nodes is None:
+                    Q_hx_nodes = np.zeros(n)
+                Q_hx_nodes[0] += Q_hs   # top node receives headspace heat
+
             F = np.array(F_list)
             S = np.array(S_list)
             T_src = self._dense_T_src(T_src_nodes)
@@ -924,29 +1130,39 @@ class ThermalStorage1D:
             # 3) Heat losses to ambient
             dT_dt += Q_loss_nodes / C_nodes
 
-            # 4) Heat exchangers (epsilon-NTU, explicit)
+            # 4) Heat exchangers (epsilon-NTU, explicit) and headspace
             if Q_hx_nodes is not None:
                 dT_dt += Q_hx_nodes / C_nodes
 
             # --- Explicit Euler integration ---
             T_new = (T + dt * dT_dt).tolist()
+            # Outflow leaves at the start-of-step temperature
+            T_out = T_list
+
+        # --- Port temperatures (outlets: temperature the outflow leaves at) ---
+        port_temperatures = self._port_temperatures(
+            inputs.ports, port_weights, S_list, S_in, T_src_nodes, T_list, T_out
+        )
 
         # --- Buoyancy correction: convective adjustment ---
         if self.config.buoyancy:
             T_new = convective_adjustment(T_new, self._m_nodes_list)
 
-        # --- Update transient state of loss model ---
-        self._loss_model.advance(T, self.A_wall, self._z_nodes, dt)
+        # --- Loss-model state at the end of the step ---
+        new_loss_state = state.loss_state
+        if self._loss_kind == "stateful":
+            advance: Callable[..., np.ndarray | None] = loss_model.advance
+            new_loss_state = advance(T, self.A_wall, self._z_nodes, dt, loss_state)
+        elif self._loss_kind == "legacy":
+            loss_model.advance(T, self.A_wall, self._z_nodes, dt)
 
-        # Reported loss: evaluated after advance(), which only changes the
-        # result for models with internal state (advance() overridden).
-        if not self._loss_model_is_steady:
-            Q_loss_nodes = self._compute_losses(T)
+        # Reported loss: the loss applied in this step
         Q_loss = float(-np.add.reduce(Q_loss_nodes, axis=None))   # == -np.sum()
         new_state = StorageState(
             temperatures=np.fromiter(T_new, dtype=float, count=n),
             time=state.time + dt,
             T_headspace=T_hs_new,
+            loss_state=new_loss_state,
         )
 
         return StorageOutputs(
@@ -956,6 +1172,61 @@ class ThermalStorage1D:
             hx_outlet_temperatures=hx_outlet_temperatures,
             T_headspace=T_hs_new,
         )
+
+    def _lambda_eff_at(self, T: np.ndarray) -> float:
+        """Effective conductivity λ(T_mean) · lambda_eff_factor [W/(m·K)]."""
+        T_mean = float(np.add.reduce(T, axis=None)) / T.size   # == T.mean()
+        return float(self._fluid.lambda_fluid(T_mean)) * self.config.lambda_eff_factor
+
+    def _port_temperatures(
+        self,
+        ports: list,
+        port_weights: list,
+        S: list[float],
+        S_in: dict[int, float],
+        T_src: dict[int, float],
+        T_start: list[float],
+        T_out: list[float],
+    ) -> list[float]:
+        """
+        Temperature of every port [°C] (see :class:`StorageOutputs`).
+
+        Outlet ports (``m_dot < 0``) return the temperature at which their
+        fluid leaves: the node temperature ``T_out`` of the solver's outflow
+        term, weighted over the diffusor nodes. Where inflow enters the same
+        node, the model passes it on to the outflow first (as in a hydraulic
+        header): with ``S_in`` the inflow and ``S`` the net flow of the node,
+        the outflow ``S_in − S`` leaves at
+
+            T_src                                   if S >= 0
+            (S_in·T_src − S·T_out) / (S_in − S)     if S < 0
+
+        which is the temperature at which the energy balance of the node
+        removes it. Inlet and inactive ports return the node temperature at
+        the start of the step, ``T_start``. Summed sequentially on purpose:
+        Python >= 3.12 sum() compensates float rounding, which would change
+        multi-node results.
+        """
+        temperatures = []
+        for port, weights in zip(ports, port_weights):
+            T_port = 0.0
+            if port.m_dot < 0.0:
+                for k, w in weights:
+                    s_in = S_in.get(k)
+                    if s_in is None:
+                        T_k = T_out[k]
+                    else:
+                        s = S[k]
+                        if s >= 0.0:
+                            T_k = T_src[k]
+                        else:
+                            T_k = (s_in * T_src[k] - s * T_out[k]) / (s_in - s)
+                    T_port += w * T_k
+            else:
+                for k, w in weights:
+                    T_port += w * T_start[k]
+            temperatures.append(T_port)
+        return temperatures
 
     def _fluid_state(
         self,
@@ -1076,10 +1347,11 @@ class ThermalStorage1D:
         deferred TVD anti-diffusion correction.
 
         Advection and conduction are evaluated at new time t+dt
-        (unconditionally stable, no CFL restriction). Heat losses and
-        heat-exchanger source terms are explicitly linearized (semi-implicit):
-        they use T_old as operating point and contribute only to the right-hand
-        side. This yields the tridiagonal linear system
+        (unconditionally stable, no CFL restriction). Heat losses and the
+        headspace heat are explicit (semi-implicit): they use T_old as
+        operating point and contribute only to the right-hand side; heat
+        exchangers are implicit, see :meth:`_step_implicit_hx`. This yields
+        the tridiagonal linear system
 
             A · T_new = b
 
@@ -1127,8 +1399,9 @@ class ThermalStorage1D:
             Wall heat flow per node at T_old [W] (loss model), added to the
             right-hand side (explicitly linearized).
         Q_hx_nodes : list[float], optional
-            Heat-exchanger/headspace source terms per node [W], length n.
-            Added to right-hand side (explicitly linearized). Default: None (= 0).
+            Explicit heat sources per node [W] (headspace), length n.
+            Added to right-hand side. Default: None (= 0). Heat exchangers
+            are implicit, see :meth:`_step_implicit_hx`.
         tvd_flux : list[float], optional
             Deferred TVD anti-diffusive heat flux across each internal
             interface [W], length n-1, positive downward. Caller computes it
@@ -1144,7 +1417,7 @@ class ThermalStorage1D:
         # Diagonals: d[i]*T_new[i] + a[i]*T_new[i-1] + c[i]*T_new[i+1] = b[i]
         #
         #   time derivative   d += C/dt,               b += C/dt · T_old
-        #   heat losses/HX    b += Q_loss + Q_hx       (explicitly linearized)
+        #   losses/headspace  b += Q_loss + Q_hs       (explicitly linearized)
         #   deferred TVD      b += Q_tvd               (conservative -> energy-
         #                                              neutral correction)
         #   conduction        interface k (nodes k, k+1):
@@ -1158,6 +1431,84 @@ class ThermalStorage1D:
             T, dt, F[1:-1], S, T_src, port_nodes, C_nodes, K_cond_iface, cp,
             Q_loss_nodes, Q_hx_nodes, tvd_flux,
         )
+
+    def _step_implicit_hx(
+        self,
+        T: list[float],
+        dt: float,
+        F: list[float],
+        S: list[float],
+        T_src: dict[int, float],
+        port_nodes: list[int],
+        C_nodes: list[float],
+        K_cond_iface: list[float],
+        cp: float,
+        Q_loss_nodes: list[float],
+        Q_src: list[float] | None,
+        tvd_flux: list[float] | None,
+        *,
+        hx_ports: list,
+    ) -> tuple[list[float], list[float]]:
+        """
+        Implicit Euler step with the heat exchangers in the implicit system.
+
+        The ε-NTU heat flow of a heat exchanger is linear in the storage
+        temperatures, so it is evaluated at ``T_new`` like advection and
+        conduction: the storage can approach but never pass the external
+        inlet temperature, for any ``dt``. The couplings reach across the
+        HX zone, outside the tridiagonal band, so the system of
+        :meth:`_step_implicit` (same arguments) is extended and solved as a
+        dense system:
+
+        - lumped: ``Q_k = w_k·ε·C_ext·(T_ext_in − Σ_j w_j·T_j)``
+          (rank-one coupling of the zone nodes),
+        - segmented: with the zone nodes ``k_0, k_1, ...`` in flow
+          direction and ``a = 1 − ε_s``, the external fluid enters node
+          ``k_m`` at ``a^m·T_ext_in + Σ_{l<m} ε_s·a^{m−1−l}·T_{k_l}`` and
+          ``Q_{k_m} = ε_s·C_ext·(T_ext,m − T_{k_m})``.
+
+        Returns the new temperatures (before the buoyancy correction) and
+        the external outlet temperature of every HX port, evaluated at the
+        new temperatures (consistent with the transferred heat).
+        """
+        a, d, c, b = implicit_coefficients(
+            T, dt, F[1:-1], S, T_src, port_nodes, C_nodes, K_cond_iface, cp,
+            Q_loss_nodes, Q_src, tvd_flux,
+        )
+        n = self.n
+        M = np.zeros((n, n))
+        idx = np.arange(n)
+        M[idx, idx] = d
+        M[idx[1:], idx[:-1]] = a[1:]
+        M[idx[:-1], idx[1:]] = c[:-1]
+        rhs = np.array(b)
+
+        for hx in hx_ports:
+            C_ext = hx.m_dot_ext * hx.cp_ext
+            if C_ext <= 0.0:
+                continue
+            weights = self._get_hx_weights(hx)
+            if hx.segmented:
+                nodes = self._hx_flow_order(hx, weights)
+                eps = 1.0 - math.exp(-(hx.UA / len(nodes)) / C_ext)
+                g = eps * C_ext
+                keep = 1.0 - eps
+                for m, k in enumerate(nodes):
+                    M[k, k] += g
+                    rhs[k] += g * keep ** m * hx.T_ext_in
+                    for l_, k_l in enumerate(nodes[:m]):
+                        M[k, k_l] -= g * eps * keep ** (m - 1 - l_)
+            else:
+                eps = 1.0 - math.exp(-hx.UA / C_ext)
+                g = eps * C_ext
+                for k, w_k in weights:
+                    rhs[k] += g * w_k * hx.T_ext_in
+                    for j, w_j in weights:
+                        M[k, j] += g * w_k * w_j
+
+        T_new = np.linalg.solve(M, rhs)
+        _, hx_outlet_temperatures = self._compute_hx_source_terms(T_new, hx_ports)
+        return T_new.tolist(), hx_outlet_temperatures
 
     @staticmethod
     def _solve_tdma(
@@ -1311,6 +1662,9 @@ class ThermalStorage1D:
         nodes : list[int]
             Nodes connected to at least one port (each once); ``S`` is zero
             at all other nodes.
+        S_in : dict[int, float]
+            Inflow [kg/s] (sum of the positive port contributions) of every
+            node with inflow; the keys are those of ``T_src``.
         """
         S = [0.0] * self.n
         S_pos: dict[int, float] = {}
@@ -1339,7 +1693,7 @@ class ThermalStorage1D:
             if s_pos > 0.0
         }
         F = [0.0, *accumulate(S)]
-        return S, F, T_src, weights, list(nodes)
+        return S, F, T_src, weights, list(nodes), S_pos
 
     def _dense_T_src(self, T_src: dict) -> np.ndarray:
         """Inlet temperatures from :meth:`_port_flows` as a length-n array."""
@@ -1391,7 +1745,7 @@ class ThermalStorage1D:
             Mass-flow-weighted inlet temperature per node [°C],
             shape (n_nodes,). Relevant only for nodes with active inlet.
         """
-        S, _, T_src, _, _ = self._port_flows(ports)
+        S, _, T_src, _, _, _ = self._port_flows(ports)
         return np.array(S), self._dense_T_src(T_src)
 
     def _compute_advection_ports(
@@ -1571,7 +1925,12 @@ class ThermalStorage1D:
 
         return Q
 
-    def _compute_losses(self, T: np.ndarray) -> np.ndarray:
+    def _compute_losses(
+        self,
+        T: np.ndarray,
+        loss_model: LossModel | None = None,
+        loss_state: np.ndarray | None = None,
+    ) -> np.ndarray:
         """
         Compute ambient heat loss for each node [W].
 
@@ -1579,6 +1938,11 @@ class ThermalStorage1D:
         ----------
         T : numpy.ndarray
             Current temperature profile [°C].
+        loss_model : LossModel, optional
+            Loss model of this step (default: the configured one).
+        loss_state : numpy.ndarray, optional
+            Internal state of a loss model with state
+            (``StorageState.loss_state``).
 
         Returns
         -------
@@ -1596,7 +1960,23 @@ class ThermalStorage1D:
         A negative value means heat loss from storage to ambient.
         For boundary nodes, A_wall,i includes top/bottom surfaces.
         """
-        return self._loss_model.Q_loss_nodes(T, self.A_wall, self._z_nodes)
+        model = self._loss_model if loss_model is None else loss_model
+        if self._loss_kind == "stateful":
+            Q_loss_nodes: Callable[..., np.ndarray] = model.Q_loss_nodes
+            return Q_loss_nodes(T, self.A_wall, self._z_nodes, loss_state)
+        return model.Q_loss_nodes(T, self.A_wall, self._z_nodes)
+
+    def _roof_temperature(self, inputs: StorageInputs, loss_model: LossModel) -> float:
+        """
+        Ambient temperature above the headspace roof [°C].
+
+        ``inputs.T_ambient`` if given, else the air-side temperature of the
+        loss model, else ``StorageConfig.T_ambient``.
+        """
+        if inputs.T_ambient is not None:
+            return float(inputs.T_ambient)
+        T_air = loss_model.air_temperature
+        return float(self.config.T_ambient) if T_air is None else T_air
 
     def _get_hx_weights(self, hx: HeatExchangerPort) -> list:
         """
@@ -1625,6 +2005,35 @@ class ThermalStorage1D:
             return [(k, 1.0)]
         w = 1.0 / len(indices)
         return [(k, w) for k in indices]
+
+    def _hx_flow_order(self, hx: HeatExchangerPort, weights: list) -> list[int]:
+        """Zone nodes of a segmented HX in the flow direction of its fluid."""
+        # _z_nodes[0] = top (z=H), _z_nodes[N-1] = bottom (z=0).
+        # "downward": enters at top (high z) -> descending z -> reverse=True.
+        # "upward":   enters at bottom (low z) -> ascending z -> reverse=False.
+        return sorted(
+            [k for k, _ in weights],
+            key=lambda k: self._z_nodes[k],
+            reverse=(hx.flow_direction == "downward"),
+        )
+
+    def _hx_conductances(self, hx: HeatExchangerPort) -> list[tuple[int, float]]:
+        """
+        ``(node, G)`` pairs: conductance [W/K] of the HX acting on each node.
+
+        ``ε·C_ext·w_k`` (lumped) or ``ε_s·C_ext`` (segmented): the factor of
+        the node temperature in its own HX heat flow, used for the explicit
+        stability limit (:meth:`_stability_numbers`).
+        """
+        C_ext = hx.m_dot_ext * hx.cp_ext
+        if C_ext <= 0.0:
+            return []
+        weights = self._get_hx_weights(hx)
+        if hx.segmented:
+            eps_seg = 1.0 - math.exp(-(hx.UA / len(weights)) / C_ext)
+            return [(k, eps_seg * C_ext) for k, _ in weights]
+        eps = 1.0 - math.exp(-hx.UA / C_ext)
+        return [(k, eps * C_ext * w) for k, w in weights]
 
     def _compute_hx_source_terms(
         self,
@@ -1684,16 +2093,8 @@ class ThermalStorage1D:
 
             if hx.segmented:
                 # --- Segmented model ---
-                # Sort nodes in external-fluid flow direction.
-                # _z_nodes[0] = top (z=H), _z_nodes[N-1] = bottom (z=0).
-                # "downward": enters at top (high z) -> descending z -> reverse=True.
-                # "upward":   enters at bottom (low z) -> ascending z -> reverse=False.
-                reverse = (hx.flow_direction == "downward")
-                ordered_nodes = sorted(
-                    [k for k, _ in weights],
-                    key=lambda k: self._z_nodes[k],
-                    reverse=reverse,
-                )
+                # Nodes in external-fluid flow direction
+                ordered_nodes = self._hx_flow_order(hx, weights)
                 n_seg = len(ordered_nodes)
                 UA_seg = hx.UA / n_seg
                 NTU_seg = UA_seg / C_ext
@@ -1725,20 +2126,27 @@ class ThermalStorage1D:
         T_headspace: float,
         T_top: float,
         dt: float,
+        T_roof: float | None = None,
     ) -> tuple:
         """
         Compute heat exchange between headspace and water surface.
 
-        Headspace energy balance (explicit Euler):
+        Headspace energy balance, with the lid area ``A``:
 
-            C_hs · dT_hs/dt = -Q_Dach - Q_hs→Wasser
+            C_hs · dT_hs/dt = −Q_roof − Q_hs→water
+            Q_roof      = U_roof · A · (T_hs − T_roof)
+            Q_hs→water  = h_hs  · A · (T_hs − T_top)
 
-        with:
-            Q_Dach      = U_roof · A_cross · (T_hs - T_ambient)
-            Q_hs→Wasser = h_hs  · A_cross · (T_hs - T_top)
+        For fixed ``T_top`` and ``T_roof`` over the step this is a linear
+        ODE, integrated exactly: ``T_hs`` relaxes to
 
-        Both terms cool the headspace if T_hs > T_ambient and T_hs > T_top.
-        Q_hs->water is added as a source term to the top water node
+            T_eq = (U_roof·T_roof + h_hs·T_top) / (U_roof + h_hs)
+
+        with time constant ``τ = C_hs / ((U_roof + h_hs)·A)``, for any
+        ``dt`` (stable also for a light gas-only headspace with τ of a few
+        minutes). The returned heat flow is the step mean of ``Q_hs→water``,
+        so headspace, water and roof exchange exactly the same energy.
+        Q_hs→water is added as a source term to the top water node
         (positive = heat into storage).
 
         Parameters
@@ -1749,28 +2157,38 @@ class ThermalStorage1D:
             Temperature of the topmost water node [°C].
         dt : float
             Timestep size [s].
+        T_roof : float, optional
+            Ambient temperature above the roof [°C]. Default: the air-side
+            temperature of the loss model (see :meth:`_roof_temperature`).
 
         Returns
         -------
         Q_hs_to_water : float
-            Heat flow from headspace to the top water node [W].
-            Positive = heat flows into storage.
+            Mean heat flow from headspace to the top water node over the
+            step [W]. Positive = heat flows into storage.
         T_hs_new : float
             New headspace temperature after timestep [°C].
         """
-        cfg  = self.config
-        A    = float(self._A_cross_nodes[0])   # roof area approx. tank cross-section
+        cfg = self.config
+        if T_roof is None:
+            T_roof = self._roof_temperature(StorageInputs(), self._loss_model)
+        A = self._A_lid
 
-        # Thermal mass: rho/cp from config (default = concrete-equivalent roof)
-        C_hs = max(cfg.rho_headspace * A * cfg.H_headspace * cfg.cp_headspace, 1.0)
+        C_hs = cfg.rho_headspace * A * cfg.H_headspace * cfg.cp_headspace
+        G_water = cfg.h_headspace_water * A     # headspace -> water [W/K]
+        G_roof = cfg.U_roof * A                 # headspace -> ambient [W/K]
+        G = G_water + G_roof
+        if G <= 0.0:
+            return 0.0, float(T_headspace)
 
-        # Heat flows
-        Q_hs_to_water = cfg.h_headspace_water * A * (T_headspace - T_top)
-        Q_roof        = cfg.U_roof * A * (T_headspace - cfg.T_ambient)
-
-        # Explicit Euler for headspace temperature
-        dT_hs  = dt * (-Q_roof - Q_hs_to_water) / C_hs
-        return float(Q_hs_to_water), float(T_headspace + dT_hs)
+        T_eq = (G_roof * T_roof + G_water * T_top) / G
+        tau = C_hs / G
+        decay = math.exp(-dt / tau)
+        relaxed = -math.expm1(-dt / tau)        # 1 - decay, accurate for dt << tau
+        T_hs_new = T_eq + (T_headspace - T_eq) * decay
+        # ∫ Q_hs→water dt = G_water · ∫ (T_hs(t) − T_top) dt
+        E_water = G_water * ((T_eq - T_top) * dt + (T_headspace - T_eq) * tau * relaxed)
+        return float(E_water / dt), float(T_hs_new)
 
     # ------------------------------------------------------------------
     # Representation

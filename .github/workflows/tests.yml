@@ -8,17 +8,53 @@ on:
 
 jobs:
   pytest:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ["3.10", "3.12"]
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.10", "3.12", "3.14"]
+    env:
+      # The bitwise golden-master check needs the machine the reference was
+      # recorded on (SIMD code paths of exp/pow); CI runs the tolerance check.
+      GOLDEN_BITWISE: "0"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
       - run: pip install -e ".[test]"
+      # Includes the docstring examples (--doctest-modules in pyproject.toml)
       - run: pytest
+
+  min-deps:
+    # Oldest supported Python with the lower bound of NumPy in pyproject.toml
+    runs-on: ubuntu-latest
+    env:
+      GOLDEN_BITWISE: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - run: pip install "numpy==1.21.6" -e ".[test]"
+      - run: pytest
+
+  scripts:
+    # Smoke test: the example and the benchmark scripts run (no measurement
+    # data, no FreeTTES); their output is not checked.
+    runs-on: ubuntu-latest
+    env:
+      MPLBACKEND: Agg
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[examples,benchmark]"
+      - run: python examples/example_simulation.py
+      - run: python benchmark/benchmark_step_performance.py --nodes 5 20 --repeats 1
+      - run: python benchmark/benchmark_model_variants.py --no-freetttes
 
   lint:
     runs-on: ubuntu-latest

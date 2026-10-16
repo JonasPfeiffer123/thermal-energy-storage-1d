@@ -1,4 +1,4 @@
-﻿"""Geometry models used by the 1D thermal storage solver."""
+"""Geometry models used by the 1D thermal storage solver."""
 
 from __future__ import annotations
 
@@ -220,6 +220,7 @@ class TruncatedConeGeometry(GeometryModel):
 
         >>> geom = TruncatedConeGeometry(r_bottom=10.0, r_top=20.0, height=10.0)
         >>> print(f"Volume: {geom.volume:.1f} m³")
+        Volume: 7330.4 m³
     """
 
     def __init__(self, r_bottom: float, r_top: float, height: float) -> None:
@@ -351,6 +352,7 @@ class TruncatedPyramidGeometry(GeometryModel):
         ...     height=10.0,
         ... )
         >>> print(f"Volume: {geom.volume:.0f} m³")
+        Volume: 145333 m³
 
     From bottom area, height and slope (short form):
 

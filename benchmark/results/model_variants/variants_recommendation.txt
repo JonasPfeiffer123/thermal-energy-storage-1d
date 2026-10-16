@@ -23,7 +23,8 @@ Stability requirement
 
 Recommended configuration
 -------------------------
-  1D N=2  Upw-Impl – implicit, unconditionally stable.
+  None: no FreeTTES reference, so no accuracy comparison.
+  Run with --freetttes-src PATH for an accuracy-based recommendation.
 
 Notes
 ------------------------------

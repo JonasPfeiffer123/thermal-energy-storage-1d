@@ -11,7 +11,7 @@ A 1D finite-volume model of a stratified hot-water thermal energy storage (TES) 
 
 - **1D stratification model** — N vertical nodes, energy balance with advection, conduction, and heat loss
 - **Advection schemes** — Upwind (1st order) and TVD van Leer (2nd order, default)
-- **Solvers** — Explicit Euler (CFL-limited, auto sub-stepping) and Implicit Euler (TDMA, unconditionally stable)
+- **Solvers** — Explicit Euler (auto sub-stepping within the CFL and conduction limits) and Implicit Euler (TDMA, unconditionally stable, heat exchangers implicit)
 - **Buoyancy / convective adjustment** — caloric mixing after each timestep, O(N)
 - **Flexible port system** — arbitrary number of hydraulic ports at configurable heights with diffusor models (PointDiffusor, UniformDiffusor)
 - **Heat exchanger port** — ε-NTU indirect heat transfer without mass exchange
@@ -21,26 +21,23 @@ A 1D finite-volume model of a stratified hot-water thermal energy storage (TES) 
 - **Headspace model** — dynamic roof/gas space thermal mass (for atmospheric pit stores)
 - **Storage presets** — StoragePresets factory for common configurations
 - **Interactive UI** — PyQt6 GUI with 3D tank visualisation and live plots
-- **FMI 2.0 interface** — planned co-simulation coupling via pythonfmu
+- **Co-simulation interface** — `step()` is a function of the complete `StorageState` (repeatable for rollback and iterative coupling); outlet temperatures close the energy balance of each step; per-step ambient temperature
+
+Planned: FMI 2.0 interface for co-simulation coupling via pythonfmu.
 
 ## Requirements
 
-```
-numpy>=1.20
-matplotlib>=3.4
-```
-
-Install:
+Python ≥ 3.10. The model itself only needs NumPy (≥ 1.21.6):
 
 ```bash
-pip install -r requirements.txt
+pip install -e .                          # model only
+pip install -e ".[examples,benchmark]"    # + matplotlib, pandas for examples/ and benchmark/
+pip install -e ".[ui]"                    # + PyQt6 for the interactive UI
 ```
 
-For the interactive UI additionally:
-
-```bash
-pip install -r requirements_ui.txt   # PyQt6, pyqtgraph, PyOpenGL
-```
+Without installing the package, `pip install -r requirements.txt` (examples
+and benchmarks) and `pip install -r requirements_ui.txt` (UI) install the
+same dependencies.
 
 ## Quick Start
 
@@ -117,14 +114,22 @@ thermal-energy-storage-1d/
 ## Tests
 
 The core test suite is self-contained (no measurement data required) and covers
-energy/mass conservation, analytical verification (conduction, exponential
+energy/mass conservation (including the energy balance of the step outputs at
+the coupling interface), analytical verification (conduction, exponential
 cooling, plug-flow advection front), the TDMA solver, convective adjustment,
-auto sub-stepping, and a golden-scenario regression:
+auto sub-stepping, the co-simulation contract (repeatable steps), a
+golden-master regression over one simulated year for 133 configurations, and
+the docstring examples:
 
 ```bash
 pip install -e .[test]
-pytest
+pytest                      # everything (about 2 min)
+pytest -m "not golden"      # without the one-year golden-master runs
 ```
+
+The golden master is compared bit for bit only on the platform it was
+recorded on (`GOLDEN_BITWISE=0` disables that check, as in CI) and within a
+relative tolerance of 1e-12 everywhere.
 
 The optional Dronninglund validation regression in `tests/test_validation.py`
 runs only when the measurement data is present (see [Validation](#validation)),

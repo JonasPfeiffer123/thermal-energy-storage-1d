@@ -14,6 +14,7 @@ import pytest
 
 from thermal_energy_storage_model._kernels import (
     convective_adjustment,
+    implicit_coefficients,
     implicit_solve,
     solve_tdma,
     tvd_correction,
@@ -223,6 +224,32 @@ def test_implicit_solve_bitwise(rng, n, with_tvd):
             Q_hx.tolist() if trial % 3 == 0 else None, flux,
         )
         assert np.array(new).tobytes() == ref.tobytes()
+
+
+@pytest.mark.parametrize("n", [2, 3, 5, 20, 50])
+def test_implicit_coefficients_match_fused_solve(rng, n):
+    """The separately assembled system (implicit heat-exchanger path) is the
+    one implicit_solve() eliminates on the fly: solving it with solve_tdma()
+    gives the same result bit for bit."""
+    rho, dz, cp, dt = 977.8, 0.4, 4187.0, 3600.0
+    A_iface = rng.uniform(5.0, 40.0, n - 1)
+    denominator = [rho * a * dz for a in A_iface.tolist()]
+    for trial in range(200):
+        T = _profile(rng, n)
+        S, F, T_src = _ports(rng, n)
+        port_nodes = [int(k) for k in np.flatnonzero(S)]
+        T_src_nodes = {k: float(T_src[k]) for k in port_nodes if S[k] > 0.0}
+        args = (
+            T.tolist(), dt, F[1:-1].tolist(), S.tolist(), T_src_nodes, port_nodes,
+            (rho * rng.uniform(2.0, 20.0, n) * 4180.0).tolist(),
+            (3.3 * A_iface / dz).tolist(), cp,
+            rng.normal(-50.0, 20.0, n).tolist(),
+            rng.normal(0.0, 500.0, n).tolist() if trial % 3 == 0 else None,
+            tvd_fluxes(T.tolist(), F[1:-1].tolist(), cp, dt, denominator)
+            if n >= 3 and trial % 2 else None,
+        )
+        x = solve_tdma(*implicit_coefficients(*args))
+        assert np.array(x).tobytes() == np.array(implicit_solve(*args)).tobytes()
 
 
 @pytest.mark.parametrize("n", [1, 2, 3, 5, 20, 50])

@@ -25,7 +25,10 @@ REF = {
     "final_top": 73.049360,
     "final_bot": 46.032594,
     "final_mean": 59.859434,
-    "discharge_outlet": 78.003608,
+    # The implicit solver lets the outflow leave at the end-of-step
+    # temperature, so the outlet reports it (was the start-of-step value
+    # 78.003608, which did not match the energy removed).
+    "discharge_outlet": 73.049360,
 }
 ATOL = 1e-3  # K
 

@@ -152,11 +152,9 @@ def test_transient_ground_loss_initial_wall_loss_uses_t_init():
 
 def test_transient_ground_loss_explicit_t_init_overrides_t_far():
     loss = _make_transient_loss(T_far=8.0, T_init=15.0)
-    T_nodes = np.full(3, 60.0)
-    A_wall = np.full(3, 10.0)
-    z = np.linspace(2.5, 0.5, 3)
-    loss.Q_loss_nodes(T_nodes, A_wall, z)  # triggers _ensure_init
-    assert np.all(loss.T_ground == pytest.approx(15.0))
+    state = loss.initial_state(3)
+    assert state.shape == (3, 4)
+    assert np.all(state == pytest.approx(15.0))
 
 
 def test_transient_ground_loss_steady_state_is_a_fixed_point():
@@ -180,15 +178,14 @@ def test_transient_ground_loss_steady_state_is_a_fixed_point():
     T_storage = np.full(n_nodes, 60.0)
     q = (T_storage[1] - T_far) / ((n_layers + 1) * R)
     steady = np.array([T_storage[0] - (j + 1) * q * R for j in range(n_layers)])
-    loss._T_ground = np.tile(steady, (n_nodes, 1))
-    before = loss._T_ground.copy()
+    before = np.tile(steady, (n_nodes, 1))
 
     A_wall = np.full(n_nodes, 10.0)
     z = np.linspace(4.5, 0.5, n_nodes)
-    loss.advance(T_storage, A_wall, z, dt=500.0)
+    after = loss.advance(T_storage, A_wall, z, 500.0, before)
 
     # Row 0 (lid) is intentionally excluded from the transient update.
-    assert np.allclose(loss._T_ground[1:], before[1:], atol=1e-9)
+    assert np.allclose(after[1:], before[1:], atol=1e-9)
 
 
 def test_transient_ground_loss_lid_row_never_updated():
@@ -196,31 +193,118 @@ def test_transient_ground_loss_lid_row_never_updated():
     T_nodes = np.full(5, 90.0)  # far from any equilibrium
     A_wall = np.full(5, 10.0)
     z = np.linspace(4.5, 0.5, 5)
-    loss.Q_loss_nodes(T_nodes, A_wall, z)  # initialize
-    loss._T_ground[0, :] = 42.0  # sentinel value on the (unused) lid row
+    state = loss.initial_state(5)
+    state[0, :] = 42.0  # sentinel value on the (unused) lid row
 
     for _ in range(50):
-        loss.advance(T_nodes, A_wall, z, dt=1000.0)
+        state = loss.advance(T_nodes, A_wall, z, 1000.0, state)
 
-    assert np.all(loss.T_ground[0] == 42.0)
+    assert np.all(state[0] == 42.0)
 
 
-def test_transient_ground_loss_reinitializes_on_node_count_change():
-    loss = _make_transient_loss(T_far=8.0)
-    T_nodes = np.full(3, 60.0)
-    A_wall = np.full(3, 10.0)
-    z = np.linspace(2.5, 0.5, 3)
-    loss.advance(T_nodes, A_wall, z, dt=10.0)
-    assert loss.T_ground.shape == (3, 4)
+def test_transient_ground_loss_advance_does_not_modify_its_input():
+    """The ground field lives in StorageState: advance() returns a new field."""
+    loss = _make_transient_loss()
+    T_nodes = np.full(5, 90.0)
+    A_wall = np.full(5, 10.0)
+    z = np.linspace(4.5, 0.5, 5)
+    state = loss.initial_state(5)
+    before = state.copy()
 
-    T_nodes2 = np.full(6, 60.0)
-    A_wall2 = np.full(6, 10.0)
-    z2 = np.linspace(5.5, 0.5, 6)
-    # Q_loss_nodes() also triggers _ensure_init() but performs no Euler step,
-    # so it isolates the reset from the state change advance() would add.
-    loss.Q_loss_nodes(T_nodes2, A_wall2, z2)
-    assert loss.T_ground.shape == (6, 4)
-    assert np.all(loss.T_ground == pytest.approx(8.0))  # freshly re-initialized to T_far
+    after = loss.advance(T_nodes, A_wall, z, 3600.0, state)
+
+    assert np.array_equal(state, before)
+    assert not np.array_equal(after, before)
+
+
+def test_transient_ground_loss_has_no_hidden_state():
+    """Same inputs give the same result however often the model is used."""
+    loss = _make_transient_loss()
+    T_nodes = np.full(5, 70.0)
+    A_wall = np.full(5, 10.0)
+    z = np.linspace(4.5, 0.5, 5)
+    state = loss.initial_state(5)
+    first = loss.advance(T_nodes, A_wall, z, 3600.0, state)
+    loss.advance(T_nodes, A_wall, z, 3600.0, first)   # unrelated call
+    second = loss.advance(T_nodes, A_wall, z, 3600.0, state)
+    assert first.tobytes() == second.tobytes()
+    assert (loss.Q_loss_nodes(T_nodes, A_wall, z, first).tobytes()
+            == loss.Q_loss_nodes(T_nodes, A_wall, z, second).tobytes())
+
+
+def test_transient_ground_loss_rejects_state_of_wrong_shape():
+    loss = _make_transient_loss()
+    T_nodes = np.full(5, 60.0)
+    A_wall = np.full(5, 10.0)
+    z = np.linspace(4.5, 0.5, 5)
+    with pytest.raises(ValueError, match="shape"):
+        loss.Q_loss_nodes(T_nodes, A_wall, z, loss.initial_state(6))
+    with pytest.raises(ValueError, match="shape"):
+        loss.advance(T_nodes, A_wall, z, 60.0, loss.initial_state(3))
+
+
+def test_transient_ground_loss_substeps_beyond_explicit_limit():
+    """Thin layers: dt far above R*C/2 is sub-stepped and stays bounded.
+
+    Before sub-stepping, 40 layers over 2 m with dt = 3600 s (limit about
+    900 s) diverged to ~1e39 °C within two days.
+    """
+    loss = TransientGroundLoss(
+        U_lid=0.15, T_ambient_lid=10.0, lambda_soil=2.2, rho_soil=2000.0,
+        cp_soil=800.0, d_total=2.0, n_layers=40, T_far=8.0,
+    )
+    dt = 3600.0
+    assert loss.substeps(dt) > 1
+    limit = loss._R * loss._C / 2.0
+    assert loss.substeps(limit) == 1
+
+    T_nodes = np.full(4, 80.0)
+    A_wall = np.full(4, 10.0)
+    z = np.linspace(3.5, 0.5, 4)
+    state = loss.initial_state(4)
+    for _ in range(48):
+        state = loss.advance(T_nodes, A_wall, z, dt, state)
+    assert np.all(np.isfinite(state))
+    assert state[1:].min() >= 8.0 - 1e-9
+    assert state[1:].max() <= 80.0 + 1e-9
+
+
+def test_transient_ground_loss_substeps_match_manual_steps():
+    """One sub-stepped advance() equals the same number of plain steps."""
+    loss = TransientGroundLoss(
+        U_lid=0.15, T_ambient_lid=10.0, lambda_soil=2.2, rho_soil=2000.0,
+        cp_soil=800.0, d_total=2.0, n_layers=40, T_far=8.0,
+    )
+    T_nodes = np.linspace(80.0, 40.0, 4)
+    A_wall = np.full(4, 10.0)
+    z = np.linspace(3.5, 0.5, 4)
+    dt = 3600.0
+    n = loss.substeps(dt)
+    manual = loss.initial_state(4)
+    for _ in range(n):
+        manual = loss.advance(T_nodes, A_wall, z, dt / n, manual)
+    assert np.array_equal(loss.advance(T_nodes, A_wall, z, dt, None), manual)
+
+
+def test_loss_models_air_temperature():
+    """StorageInputs.T_ambient replaces the air-side temperature only."""
+    constant = ConstantAmbientLoss(U_loss=0.3, T_ambient=10.0)
+    split = SplitAmbientLoss(U_lid=0.15, U_wall=0.35, T_ambient=8.0, T_ambient_lid=12.0)
+    ground = GroundTemperatureLoss(U_loss=0.25, burial_depth=0.5, T_surface=8.0,
+                                   T_deep=11.0)
+    transient = _make_transient_loss()
+
+    assert constant.air_temperature == 10.0
+    assert split.air_temperature == 12.0
+    assert ground.air_temperature is None
+    assert transient.air_temperature == 10.0
+
+    hot = constant.with_air_temperature(30.0)
+    assert hot.T_ambient == 30.0 and constant.T_ambient == 10.0   # copy
+    hot_split = split.with_air_temperature(30.0)
+    assert (hot_split.T_ambient_lid, hot_split.T_ambient) == (30.0, 8.0)
+    assert transient.with_air_temperature(30.0).T_ambient_lid == 30.0
+    assert ground.with_air_temperature(30.0) is ground   # no air surface
 
 
 @pytest.mark.parametrize("kwargs", [
@@ -318,6 +402,7 @@ def test_transient_ground_loss_matches_reference_bitwise(n_nodes, n_layers):
         cp_soil=800.0, d_total=7.5, n_layers=n_layers, T_far=8.0, T_init=11.0,
     )
     Tg_ref = np.full((n_nodes, n_layers), 11.0)
+    state = loss.initial_state(n_nodes)
     z = np.linspace(9.5, 0.5, n_nodes)
     A_wall = rng.uniform(1.0, 2000.0, n_nodes)
     for _ in range(300):
@@ -325,9 +410,9 @@ def test_transient_ground_loss_matches_reference_bitwise(n_nodes, n_layers):
         loss.T_ambient_lid = float(rng.uniform(-10.0, 30.0))
         loss.T_far = float(rng.uniform(6.0, 12.0))
         dt = float(rng.choice([60.0, 600.0, 3600.0]))
-        Q = loss.Q_loss_nodes(T_nodes, A_wall, z)
+        Q = loss.Q_loss_nodes(T_nodes, A_wall, z, state)
         assert Q.tobytes() == ref_transient_Q_loss_nodes(
             loss, Tg_ref, T_nodes, A_wall).tobytes()
-        loss.advance(T_nodes, A_wall, z, dt)
+        state = loss.advance(T_nodes, A_wall, z, dt, state)
         ref_transient_advance(loss, Tg_ref, T_nodes, dt)
-        assert loss.T_ground.tobytes() == Tg_ref.tobytes()
+        assert state.tobytes() == Tg_ref.tobytes()

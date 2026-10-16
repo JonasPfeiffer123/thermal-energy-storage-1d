@@ -76,14 +76,14 @@ def get_port_temps(inputs: StorageInputs, outputs) -> tuple:
     m_d = 0.0
 
     for i, p in enumerate(inputs.ports):
-        T_node = outputs.port_temperatures[i]
+        T_port = outputs.port_temperatures[i]
         if p.label == "charge_out":
-            T_charge_out = T_node
+            T_charge_out = T_port
             m_c = abs(p.m_dot)
         elif p.label == "charge_in":
             T_c_in = p.T_in
         elif p.label == "discharge_out":
-            T_discharge_out = T_node
+            T_discharge_out = T_port
             m_d = abs(p.m_dot)
 
     T_d_in = 0.0

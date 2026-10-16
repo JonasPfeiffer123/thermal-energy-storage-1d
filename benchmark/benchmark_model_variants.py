@@ -1178,8 +1178,13 @@ def print_and_save_recommendation(all_results: list[dict],
             "  This model offers the best trade-off between accuracy,",
             "  stability and computational cost for co-simulation.",
         ]
-    elif best_impl:
-        lines += [f"  {best_impl['label']} – implicit, unconditionally stable."]
+    else:
+        # Without the FreeTTES reference there is no accuracy to rank by;
+        # the first implicit variant is merely the coarsest grid.
+        lines += [
+            "  None: no FreeTTES reference, so no accuracy comparison.",
+            "  Run with --freetttes-src PATH for an accuracy-based recommendation.",
+        ]
 
     lines += [
         "",
