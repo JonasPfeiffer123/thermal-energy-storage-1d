@@ -14,7 +14,7 @@
       "n_nodes": 1,
       "solver": "explicit",
       "scheme": "—",
-      "ms_per_step": 0.0613,
+      "ms_per_step": 0.0242,
       "speedup": null,
       "mae_K": null,
       "rmse_K": null
@@ -24,7 +24,7 @@
       "n_nodes": 2,
       "solver": "explicit",
       "scheme": "upwind",
-      "ms_per_step": 0.1938,
+      "ms_per_step": 0.0754,
       "speedup": null,
       "mae_K": null,
       "rmse_K": null
@@ -34,7 +34,7 @@
       "n_nodes": 5,
       "solver": "explicit",
       "scheme": "upwind",
-      "ms_per_step": 0.2016,
+      "ms_per_step": 0.0524,
       "speedup": null,
       "mae_K": null,
       "rmse_K": null
@@ -44,7 +44,7 @@
       "n_nodes": 10,
       "solver": "explicit",
       "scheme": "upwind",
-      "ms_per_step": 0.206,
+      "ms_per_step": 0.0599,
       "speedup": null,
       "mae_K": null,
       "rmse_K": null
@@ -54,7 +54,7 @@
       "n_nodes": 50,
       "solver": "explicit",
       "scheme": "upwind",
-      "ms_per_step": 0.2444,
+      "ms_per_step": 0.1207,
       "speedup": null,
       "mae_K": null,
       "rmse_K": null
@@ -64,7 +64,7 @@
       "n_nodes": 10,
       "solver": "explicit",
       "scheme": "tvd",
-      "ms_per_step": 0.1962,
+      "ms_per_step": 0.0836,
       "speedup": null,
       "mae_K": null,
       "rmse_K": null
@@ -74,7 +74,7 @@
       "n_nodes": 50,
       "solver": "explicit",
       "scheme": "tvd",
-      "ms_per_step": 0.3702,
+      "ms_per_step": 0.1408,
       "speedup": null,
       "mae_K": null,
       "rmse_K": null
@@ -84,7 +84,7 @@
       "n_nodes": 2,
       "solver": "implicit",
       "scheme": "upwind",
-      "ms_per_step": 0.1478,
+      "ms_per_step": 0.0311,
       "speedup": null,
       "mae_K": null,
       "rmse_K": null
@@ -94,7 +94,7 @@
       "n_nodes": 10,
       "solver": "implicit",
       "scheme": "upwind",
-      "ms_per_step": 0.1821,
+      "ms_per_step": 0.0396,
       "speedup": null,
       "mae_K": null,
       "rmse_K": null
@@ -104,7 +104,7 @@
       "n_nodes": 20,
       "solver": "implicit",
       "scheme": "upwind",
-      "ms_per_step": 0.2018,
+      "ms_per_step": 0.0548,
       "speedup": null,
       "mae_K": null,
       "rmse_K": null
@@ -114,7 +114,7 @@
       "n_nodes": 50,
       "solver": "implicit",
       "scheme": "upwind",
-      "ms_per_step": 0.2816,
+      "ms_per_step": 0.1068,
       "speedup": null,
       "mae_K": null,
       "rmse_K": null
@@ -124,7 +124,7 @@
       "n_nodes": 200,
       "solver": "implicit",
       "scheme": "upwind",
-      "ms_per_step": 0.7083,
+      "ms_per_step": 0.3662,
       "speedup": null,
       "mae_K": null,
       "rmse_K": null
@@ -134,7 +134,7 @@
       "n_nodes": 10,
       "solver": "implicit",
       "scheme": "tvd",
-      "ms_per_step": 0.1703,
+      "ms_per_step": 0.0438,
       "speedup": null,
       "mae_K": null,
       "rmse_K": null
@@ -144,7 +144,7 @@
       "n_nodes": 50,
       "solver": "implicit",
       "scheme": "tvd",
-      "ms_per_step": 0.2818,
+      "ms_per_step": 0.12,
       "speedup": null,
       "mae_K": null,
       "rmse_K": null
@@ -154,7 +154,7 @@
       "n_nodes": 200,
       "solver": "implicit",
       "scheme": "tvd",
-      "ms_per_step": 0.7315,
+      "ms_per_step": 0.4085,
       "speedup": null,
       "mae_K": null,
       "rmse_K": null
@@ -164,7 +164,7 @@
       "n_nodes": 50,
       "solver": "implicit",
       "scheme": "upwind",
-      "ms_per_step": 0.274,
+      "ms_per_step": 0.1041,
       "speedup": null,
       "mae_K": null,
       "rmse_K": null
@@ -174,7 +174,7 @@
       "n_nodes": 50,
       "solver": "implicit",
       "scheme": "tvd",
-      "ms_per_step": 0.2689,
+      "ms_per_step": 0.1224,
       "speedup": null,
       "mae_K": null,
       "rmse_K": null

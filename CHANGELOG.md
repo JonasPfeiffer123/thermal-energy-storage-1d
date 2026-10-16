@@ -62,6 +62,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   CSVs (MAE 4.65 K; 2.08 / 2.15 K).
 - `ThermalStorage1D.step()` costs the same within the measurement noise
   (±5 %, A/B in one process), including the new input checks.
+- `benchmark/results/model_variants/` regenerated with the current code
+  (`--no-freetttes`); without the FreeTTES reference no configuration is
+  recommended (the committed text recommended N=2, the coarsest grid).
 - The `RuntimeWarning` for unbalanced port mass flows is emitted once per
   storage instead of on every step; it now also names the simulation time of
   the first unbalanced step. Its text contains the flow values, so Python's
@@ -128,6 +131,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `TransientGroundLoss` diverged for thin ground layers (40 layers over 2 m,
   hourly steps: 1e39 °C); `advance()` sub-steps beyond the explicit limit
   `R·C/2`.
+- The UI sub-stepped the explicit solver a second time, and the implicit
+  solver for no reason; it now leaves stability to the model.
 - `benchmark/hoje_taastrup_validation.py` reads the 2024 dataset from
   `data/HojeTaastrupData/Data/`, where the HojeTaastrupData repository now
   stores its CSV files.
