@@ -4,8 +4,9 @@ Golden-master regression: one simulated year per configuration.
 The reference (``tests/golden/reference.npz``) was first recorded from the
 solver *before* the step() performance work of v1.1.0 and re-recorded after
 the numerical fixes listed in CHANGELOG.md (explicit stability limit,
-implicit heat exchangers, exact headspace integration); its ``git_commit``
-metadata names the parent commit of the recorded code. It
+implicit heat exchangers, exact headspace integration, energy-consistent
+outlet temperatures, SOC, applied ``Q_loss``); its ``git_commit`` metadata
+names the parent commit of the recorded code. It
 covers node counts 5/20/50, every geometry, loss model and fluid model,
 buoyancy on/off, the implicit/explicit x upwind/TVD variants, the presets and
 the port/diffusor/heat-exchanger/headspace paths (``tests/golden/scenarios.py``).

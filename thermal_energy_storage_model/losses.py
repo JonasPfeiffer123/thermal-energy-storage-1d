@@ -1,9 +1,10 @@
-
 """Heat-loss model implementations for the 1D thermal storage solver."""
 
 from __future__ import annotations
 
+import copy
 import math
+from typing import ClassVar
 
 import numpy as np
 
@@ -25,7 +26,31 @@ class LossModel:
                              (occurs when T_ambient > T_node)
     Negative return value -> heat loss from storage to outside
                              (normal case: T_storage > T_ambient)
+
+    Models with internal state
+    --------------------------
+    A loss model holds parameters only. Models whose heat flow depends on
+    their history (for example the ground temperatures of
+    :class:`TransientGroundLoss`) keep that history in
+    ``StorageState.loss_state``, so that a storage state describes the
+    complete simulation state and ``step()`` can be repeated from any state
+    (rollback, iterative coupling). Such models override
+
+    - :meth:`initial_state` to return the initial state array,
+    - :meth:`Q_loss_nodes` with the state as fourth argument, and
+    - :meth:`advance` to return the state at the end of the step (without
+      modifying the state passed in).
+
+    Air temperature
+    ---------------
+    ``StorageInputs.T_ambient`` sets the air temperature for one step. It
+    replaces the attribute named by :attr:`air_temperature_attr` (the
+    temperature of the air-exposed surfaces) for that step; models without
+    an air-exposed surface leave it as ``None``.
     """
+
+    air_temperature_attr: ClassVar[str | None] = None
+    """Attribute holding the air-side ambient temperature [°C], or ``None``."""
 
     def Q_loss_nodes(
         self,
@@ -43,7 +68,8 @@ class LossModel:
             Index 0 = top (hot), index N-1 = bottom (cold).
         A_wall_nodes : numpy.ndarray
             Wall area per node [m²], shape (n). Provided by the geometry
-            model and includes lid/bottom for boundary nodes.
+            model and includes lid/bottom for boundary nodes (without the lid
+            when the headspace model is active).
         z_node_centers : numpy.ndarray
             z-coordinate of each node center measured from storage bottom [m],
             shape (n). Index 0 has the largest z-value (top).
@@ -55,19 +81,30 @@ class LossModel:
         """
         raise NotImplementedError
 
+    def initial_state(self, n_nodes: int) -> np.ndarray | None:
+        """
+        Initial internal state for a storage with ``n_nodes`` nodes.
+
+        ``None`` (default) for models without internal state. Stored in
+        ``StorageState.loss_state`` by ``ThermalStorage1D.initialize()``.
+        """
+        del n_nodes
+        return None
+
     def advance(
         self,
         T_nodes: np.ndarray,
         A_wall_nodes: np.ndarray,
         z_node_centers: np.ndarray,
         dt: float,
-    ) -> None:
+    ) -> np.ndarray | None:
         """
-        Update internal loss-model state for the next timestep.
+        Advance the internal state over one timestep.
 
         Default implementation: no operation (steady-state models have
-        no internal state). Override in transient models such as
-        ``TransientGroundLoss``.
+        no internal state). Models with internal state take it as fifth
+        argument and return the state at the end of the step; see the class
+        notes.
 
         Parameters
         ----------
@@ -79,7 +116,33 @@ class LossModel:
             z-coordinate of node centers from bottom [m].
         dt : float
             Timestep size [s].
+
+        Returns
+        -------
+        numpy.ndarray or None
+            State at the end of the step (``None`` without internal state).
         """
+        return None
+
+    @property
+    def air_temperature(self) -> float | None:
+        """Air-side ambient temperature [°C], ``None`` without such a surface."""
+        attr = self.air_temperature_attr
+        return None if attr is None else float(getattr(self, attr))
+
+    def with_air_temperature(self, T_air: float) -> LossModel:
+        """
+        This model with the air-side ambient temperature set to ``T_air``.
+
+        Returns a shallow copy (the original is not modified), or the model
+        itself if it has no air-exposed surface.
+        """
+        attr = self.air_temperature_attr
+        if attr is None:
+            return self
+        model = copy.copy(self)
+        setattr(model, attr, float(T_air))
+        return model
 
 
 class ConstantAmbientLoss(LossModel):
@@ -100,6 +163,8 @@ class ConstantAmbientLoss(LossModel):
     --------
         >>> loss = ConstantAmbientLoss(U_loss=0.3, T_ambient=10.0)
     """
+
+    air_temperature_attr: ClassVar[str | None] = "T_ambient"
 
     def __init__(self, U_loss: float, T_ambient: float) -> None:
         if U_loss < 0:
@@ -149,7 +214,12 @@ class SplitAmbientLoss(LossModel):
         >>> loss = SplitAmbientLoss(U_lid=0.151, U_wall=0.35, T_ambient=8.0)
         >>> loss = SplitAmbientLoss(U_lid=0.167, U_wall=0.35, T_ambient=8.0,
         ...                         T_ambient_lid=12.0)  # seasonal lid value
+
+    ``StorageInputs.T_ambient`` sets the lid air temperature
+    (``T_ambient_lid``); walls and bottom keep ``T_ambient``.
     """
+
+    air_temperature_attr: ClassVar[str | None] = "T_ambient_lid"
 
     def __init__(
         self,
@@ -321,15 +391,14 @@ class TransientGroundLoss(LossModel):
 
     For each storage node, a chain of ``n_layers`` ground layers is simulated
     between tank wall and far-field boundary condition. Each layer has thermal
-    capacitance and resistance; internal state (ground temperatures) is
-    advanced using explicit Euler in each ``advance()`` call.
+    capacitance and resistance. The ground temperatures are part of the
+    storage state (``StorageState.loss_state``, shape
+    ``(n_nodes, n_layers)``) and are advanced with explicit Euler in
+    :meth:`advance`, split into as many equal sub-steps as the stability
+    limit of the layer chain requires.
 
     The lid node (index 0) is treated as steady-state because it is exposed
-    to air and has no soil above it.
-
-    Explicit Euler is stable (and free of overshoot) for
-    ``dt ≤ R·C/2 = rho_soil·cp_soil·d_layer² / (2·lambda_soil)``; longer
-    timesteps are split into equal sub-steps (:meth:`substeps`).
+    to air and has no soil above it; row 0 of the ground field is unused.
 
     Physical model (per storage node i, ground layers j=1…n_layers)
     ----------------------------------------------------------------
@@ -346,6 +415,10 @@ class TransientGroundLoss(LossModel):
     Heat flow from ground into storage (node i, j ≥ 1):
         q_wall[i] = (T_g[i,1] − T_storage[i]) / R    [W/m²]
         Q_loss[i] = A_wall[i] · q_wall[i]             [W]
+
+    Explicit Euler is stable (and free of overshoot) for
+    ``dt ≤ R·C/2 = rho_soil·cp_soil·d_layer² / (2·lambda_soil)``; longer
+    timesteps are sub-stepped.
 
     Parameters
     ----------
@@ -383,7 +456,11 @@ class TransientGroundLoss(LossModel):
         ...     n_layers=4,
         ...     T_far=8.0,
         ... )
+        >>> loss.initial_state(n_nodes=3).shape
+        (3, 4)
     """
+
+    air_temperature_attr: ClassVar[str | None] = "T_ambient_lid"
 
     def __init__(
         self,
@@ -397,13 +474,17 @@ class TransientGroundLoss(LossModel):
         T_far: float = 8.0,
         T_init: float | None = None,
     ) -> None:
-        if U_lid < 0:
+        if not U_lid >= 0:
             raise ValueError(f"U_lid must be >= 0, but is {U_lid}.")
-        if lambda_soil <= 0:
+        if not lambda_soil > 0:
             raise ValueError(f"lambda_soil must be > 0, but is {lambda_soil}.")
+        if not rho_soil > 0:
+            raise ValueError(f"rho_soil must be > 0, but is {rho_soil}.")
+        if not cp_soil > 0:
+            raise ValueError(f"cp_soil must be > 0, but is {cp_soil}.")
         if n_layers < 1:
             raise ValueError(f"n_layers must be >= 1, but is {n_layers}.")
-        if d_total <= 0:
+        if not d_total > 0:
             raise ValueError(f"d_total must be > 0, but is {d_total}.")
 
         self.U_lid = float(U_lid)
@@ -421,17 +502,20 @@ class TransientGroundLoss(LossModel):
         self._R = self._d_layer / self.lambda_soil          # K·m²/W
         self._C = self.rho_soil * self.cp_soil * self._d_layer  # J/(K·m²)
 
-        # Internal state: T_ground[n_nodes, n_layers]
-        # Initialized on first advance() or Q_loss_nodes() call.
-        self._T_ground: np.ndarray | None = None
+    def initial_state(self, n_nodes: int) -> np.ndarray:
+        """Ground field ``(n_nodes, n_layers)`` at ``T_init`` [°C]."""
+        return np.full((n_nodes, self.n_layers), self._T_init, dtype=float)
 
-    def _ensure_init(self, n_nodes: int) -> np.ndarray:
-        """Initialize T_ground with T_init if not initialized yet, return it."""
-        Tg = self._T_ground
-        if Tg is None or Tg.shape[0] != n_nodes:
-            Tg = np.full((n_nodes, self.n_layers), self._T_init, dtype=float)
-            self._T_ground = Tg
-        return Tg
+    def _field(self, state: np.ndarray | None, n_nodes: int) -> np.ndarray:
+        """``state`` after a shape check; the initial field if ``None``."""
+        if state is None:
+            return self.initial_state(n_nodes)
+        if state.shape != (n_nodes, self.n_layers):
+            raise ValueError(
+                f"Ground state must have shape {(n_nodes, self.n_layers)}, "
+                f"but has shape {state.shape}."
+            )
+        return state
 
     def substeps(self, dt: float) -> int:
         """Number of explicit Euler sub-steps :meth:`advance` uses for ``dt``."""
@@ -444,17 +528,18 @@ class TransientGroundLoss(LossModel):
         T_nodes: np.ndarray,
         A_wall_nodes: np.ndarray,
         _z_node_centers: np.ndarray,
+        state: np.ndarray | None = None,
     ) -> np.ndarray:
         """
-        Heat flow from ground into storage based on current
-        ground-temperature field.
+        Heat flow from ground into storage for the ground field ``state``.
 
         Lid node (index 0): steady-state,
         Q = U_lid · A[0] · (T_ambient_lid − T[0]).
         Remaining nodes: Q = A[i] · (T_g[i,1] − T[i]) / R_1.
+        ``state=None`` uses the initial ground field.
         """
         del _z_node_centers
-        Tg = self._ensure_init(len(T_nodes))
+        Tg = self._field(state, len(T_nodes))
 
         # Wall + bottom: transient (heat flow from first ground layer);
         # the lid entry is overwritten below
@@ -469,16 +554,17 @@ class TransientGroundLoss(LossModel):
         A_wall_nodes: np.ndarray,
         _z_node_centers: np.ndarray,
         dt: float,
-    ) -> None:
+        state: np.ndarray | None = None,
+    ) -> np.ndarray:
         """
-        Explicit Euler step for all ground layers, split into
-        :meth:`substeps` equal sub-steps beyond the stability limit.
+        Ground field after ``dt`` (explicit Euler, sub-stepped if needed).
 
         The storage temperatures ``T_nodes`` are held for the whole step.
+        ``state`` is not modified; ``None`` starts from the initial field.
         Node 0 (lid) is not treated transiently.
         """
         del A_wall_nodes, _z_node_centers
-        Tg = self._ensure_init(len(T_nodes))   # (n_nodes, n_layers)
+        Tg = self._field(state, len(T_nodes)).copy()   # (n_nodes, n_layers)
         R = self._R
         n_sub = self.substeps(dt)
         dt_sub = dt / n_sub
@@ -498,11 +584,7 @@ class TransientGroundLoss(LossModel):
             T_right[:, -1] = self.T_far
 
             G += (dt_sub / self._C) * ((T_left - G) / R - (G - T_right) / R)
-
-    @property
-    def T_ground(self) -> np.ndarray | None:
-        """Current ground-temperature field [n_nodes × n_layers], °C."""
-        return self._T_ground
+        return Tg
 
     def __repr__(self) -> str:
         return (
