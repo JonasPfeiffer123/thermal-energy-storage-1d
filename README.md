@@ -1,7 +1,7 @@
 # thermal-energy-storage-1d
 
 [![Tests](https://github.com/JonasPfeiffer123/thermal-energy-storage-1d/actions/workflows/tests.yml/badge.svg)](https://github.com/JonasPfeiffer123/thermal-energy-storage-1d/actions/workflows/tests.yml)
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20595165.svg)](https://doi.org/10.5281/zenodo.20595165)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20595164.svg)](https://doi.org/10.5281/zenodo.20595164)
 
 A 1D finite-volume model of a stratified hot-water thermal energy storage (TES) tank, designed for coupling with district heating network simulation tools.
 
@@ -226,14 +226,17 @@ cffconvert --format bibtex
 
 ### Archiving a citable release (Zenodo DOI)
 
-This repository is archived on [Zenodo](https://zenodo.org); each tagged GitHub
-release mints a permanent, citable version DOI (the badge above always points to
-the latest one via Zenodo's concept DOI). To archive a future release:
+This repository is archived on [Zenodo](https://zenodo.org); each GitHub
+release mints a permanent, citable version DOI. The badge above and the `doi:`
+field in [CITATION.cff](CITATION.cff) use the concept DOI
+[10.5281/zenodo.20595164](https://doi.org/10.5281/zenodo.20595164), which always
+resolves to the latest version; the version DOIs are listed on the Zenodo record.
+To archive a future release:
 
-1. Create a tagged release on GitHub (e.g. `v1.1.0`). Zenodo automatically
+1. Bump `__version__`, `version`/`date-released` in [CITATION.cff](CITATION.cff)
+   and the [CHANGELOG.md](CHANGELOG.md) section.
+2. Create a GitHub release for the tag (e.g. `v2.0.0`). Zenodo automatically
    archives it and mints a new version DOI.
-2. Update the `doi:` field in [CITATION.cff](CITATION.cff), the badge in this
-   README, and [CHANGELOG.md](CHANGELOG.md) with the new DOI.
 
 See [CHANGELOG.md](CHANGELOG.md) for the version history.
 
