@@ -62,9 +62,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   CSVs (MAE 4.65 K; 2.08 / 2.15 K).
 - `ThermalStorage1D.step()` costs the same within the measurement noise
   (±5 %, A/B in one process), including the new input checks.
+- NumPy is the only required dependency (`numpy>=1.21.6`, tested with
+  Python 3.10); matplotlib moved to the extras `examples`, `benchmark`
+  (with pandas, needed by the validation scripts and not declared before)
+  and `ui`. `requirements*.txt` list the same packages.
+- `pytest` also runs the docstring examples (`--doctest-modules`); all
+  examples run, the class example of `ThermalStorage1D` used a removed API.
 - `benchmark/results/model_variants/` regenerated with the current code
   (`--no-freetttes`); without the FreeTTES reference no configuration is
   recommended (the committed text recommended N=2, the coarsest grid).
+- Docstrings: German leftovers translated, `geometry.py` without BOM.
 - The `RuntimeWarning` for unbalanced port mass flows is emitted once per
   storage instead of on every step; it now also names the simulation time of
   the first unbalanced step. Its text contains the flow values, so Python's
@@ -108,6 +115,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`tests/test_conservation.py`); the co-simulation contract
   (`tests/test_cosim_contract.py`); stability of heat exchangers, headspace,
   conduction-limited sub-steps and thin ground layers.
+- CI: Windows next to Ubuntu, Python 3.14, a job with the oldest supported
+  NumPy on Python 3.10, and a smoke test of the example and benchmark
+  scripts.
 - `benchmark/benchmark_step_performance.py --loss {constant,split,transient}`
   selects the loss model of the benchmark scenario.
 - Bit-identity tests of `SplitAmbientLoss` and `TransientGroundLoss` against

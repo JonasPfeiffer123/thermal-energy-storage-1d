@@ -76,7 +76,7 @@ DiffusorModel (abstract)
 Port                           (Dataclass: one hydraulic connection)
 HeatExchangerPort              (Dataclass: hydraulically decoupled heat exchanger)
 StorageConfig                  (Dataclass: all configuration parameters)
-StorageState                   (Dataclass: thermal state)
+StorageState                   (Dataclass: complete simulation state)
 StorageInputs                  (Dataclass: boundary conditions per timestep)
 StorageOutputs                 (Dataclass: results per timestep)
 
@@ -114,22 +114,30 @@ ThermalStorage1D.__init__()
         └──────────────────────────────────────────────────┘
 
 storage.step(state, dt, inputs)
-    ├── _port_flows()                    Port sources S, inter-node flows F, inlet T
-    │       └── _port_weights()          diffusor.node_weights(), cached per port height
-    ├── _fluid_state()                   rho, cp → node heat capacities, mean cp
-    │                                    (shared with get_soc() for the same profile)
-    ├── _compute_hx_source_terms()       Heat exchanger source terms (ε-NTU)
-    │       └── _get_hx_weights()        HX zone → equally weighted nodes
-    ├── _compute_losses()                loss_model.Q_loss_nodes()
-    ├── Explicit: _compute_advection_ports() (+ _compute_tvd_correction_ports()),
-    │   _compute_conduction(), Euler integration → T_new  (incl. Q_hx / C_nodes)
-    │   or Implicit: _kernels.tvd_fluxes() (only when advection_scheme="tvd")
-    │                _step_implicit() → _kernels.implicit_solve() → T_new
-    │                (assembly inside the TDMA forward sweep;
-    │                 b += Q_loss + Q_hx + Q_tvd, explicitly linearized)
-    ├── _kernels.convective_adjustment() (only when buoyancy=True)
-    └── port_temperatures computed       port weights → StorageOutputs
-        hx_outlet_temperatures           ε-NTU → T_ext_out per HX port
+    ├── _validate_inputs()               dt > 0, finite port / HX values
+    ├── Explicit + auto_substep: _required_substeps()
+    │       └── _stability_numbers()     CFL <= 0.9 and CFL + conduction/HX <= 1
+    └── _step_single(state, dt_sub, inputs)   (once, or n_sub times)
+        ├── _port_flows()                Port sources S, inter-node flows F, inlet T
+        │       └── _port_weights()      diffusor.node_weights(), cached per port height
+        ├── _fluid_state()               rho, cp → node heat capacities, mean cp
+        │                                (shared with get_soc() for the same profile)
+        ├── loss model of the step       inputs.T_ambient → with_air_temperature()
+        ├── _compute_headspace_exchange() exact integration of the headspace ODE
+        ├── _compute_losses()            loss_model.Q_loss_nodes(..., state.loss_state)
+        ├── Explicit: _compute_hx_source_terms() (ε-NTU at T_old),
+        │   _compute_advection_ports() (+ _compute_tvd_correction_ports()),
+        │   _compute_conduction(), Euler integration → T_new
+        │   or Implicit: _kernels.tvd_fluxes() (only when advection_scheme="tvd")
+        │                _step_implicit() → _kernels.implicit_solve() → T_new
+        │                (assembly inside the TDMA forward sweep;
+        │                 b += Q_loss + Q_headspace + Q_tvd, explicitly linearized)
+        │                with active HX ports: _step_implicit_hx()
+        │                (_kernels.implicit_coefficients() + HX couplings,
+        │                 dense solve; T_ext_out from T_new)
+        ├── _port_temperatures()         outlets: temperature the outflow leaves at
+        ├── _kernels.convective_adjustment() (only when buoyancy=True)
+        └── loss_model.advance()         new StorageState.loss_state
 ```
 
 ### Performance of `step()`
@@ -154,11 +162,21 @@ measures the per-step cost (`--loss` selects the loss model).
 
 ### State Objects
 
-The model uses **immutable state objects** (`StorageState`). `step()` always returns a new state; the old one remains untouched. This allows:
+`StorageState` is the **complete** simulation state: temperature profile,
+time, headspace temperature and the internal state of the loss model
+(`loss_state`, e.g. the ground temperatures of `TransientGroundLoss`).
+`step()` depends only on `(state, dt, inputs)` and the configuration and
+never modifies the state passed in; it returns a new one. This allows:
 
 - Reuse of the same state for predictions
 - Easy rollback (keep the old state)
-- Thread safety without locking
+- Iterative coupling: repeating a coupling step from the same state gives
+  the same result
+
+The model objects (`ThermalStorage1D`, loss models, ...) hold parameters
+and caches only. Parameters such as a loss model's ambient temperature may
+be changed between steps; for the air temperature, prefer the per-step
+input `StorageInputs.T_ambient`.
 
 ---
 
@@ -195,14 +213,16 @@ Relevant fields:
 
 ### StorageState
 
-Immutable snapshot of the thermal state:
+Complete snapshot of the simulation state (see *State Objects*):
 
 ```python
 @dataclass
 class StorageState:
-    temperatures: np.ndarray        # [°C], index 0 = top
-    time: float                     # [s]
-    T_headspace: Optional[float]    # [°C] or None (when headspace=False)
+    temperatures: np.ndarray            # [°C], index 0 = top
+    time: float                         # [s]
+    T_headspace: float | None           # [°C] or None (when headspace=False)
+    loss_state: np.ndarray | None       # loss-model state, e.g. ground
+                                        # temperatures (n_nodes, n_layers)
 
     # Properties (read-only):
     # .n_nodes, .T_top, .T_bottom, .T_mean, .copy()
@@ -215,26 +235,41 @@ Describes all boundary conditions for one timestep — hydraulic ports and heat 
 ```python
 @dataclass
 class StorageInputs:
-    ports:    list[Port]               = field(default_factory=list)
-    hx_ports: list[HeatExchangerPort]  = field(default_factory=list)
+    ports:     list[Port]               = field(default_factory=list)
+    hx_ports:  list[HeatExchangerPort]  = field(default_factory=list)
+    T_ambient: float | None             = None   # air temperature of this step [°C]
 
     @classmethod
-    def two_port(cls, m_dot_charge, T_charge_in, ..., height, z_charge_in=None, ...) -> StorageInputs:
+    def two_port(cls, m_dot_charge, T_charge_in, ..., height, z_charge_in=None, ...,
+                 T_ambient=None) -> StorageInputs:
         ...  # Convenience constructor for classic two-circuit operation
 ```
 
 An empty `StorageInputs()` (no ports, no HX ports) corresponds to standby mode.
+`T_ambient` replaces the air-side temperature of the loss model
+(`LossModel.air_temperature_attr`) and the headspace roof temperature for
+one step.
 
 ### StorageOutputs
 
 ```python
 @dataclass
 class StorageOutputs:
-    port_temperatures:      list[float]  # Node temperature per port [°C]
-    Q_loss:                 float        # Total heat loss [W]
+    port_temperatures:      list[float]  # Outlet temperature per outlet port [°C]
+    Q_loss:                 float        # Heat loss applied in the step [W]
     state:                  StorageState # New state after the timestep
     hx_outlet_temperatures: list[float]  # External outlet temperature per HX port [°C]
+    T_headspace:            float | None # Headspace temperature [°C]
 ```
+
+The outputs close the energy balance of the step: the change of
+`get_stored_energy()` equals the inlet enthalpy minus the outlet enthalpy at
+the reported outlet temperatures, plus the heat-exchanger heat, minus
+`Q_loss` (exact for constant fluid properties). An outlet port reports the
+temperature at which its fluid leaves: the start-of-step node temperature
+(explicit solver) or the end-of-step one (implicit solver); where an inflow
+enters the same node, the outflow takes the inflowing fluid first, as in a
+hydraulic header.
 
 ### ThermalStorage1D
 
@@ -243,11 +278,11 @@ The main class stores no state variables — all state flows through `StorageSta
 ```python
 class ThermalStorage1D:
     config: StorageConfig
-    m_node: float          # Mass per node [kg]
-    A_cross: np.ndarray    # Cross-sectional area per node [m²]
-    A_wall: np.ndarray     # Wall area per node [m²]
+    n: int                 # Number of nodes
     dz: float              # Node height [m]
-    node_heights: np.ndarray   # z-coordinate of each node center [m]
+    m_node: float          # Mean mass per node [kg]
+    A_cross: float         # Smallest cross-section [m²] (CFL reference)
+    A_wall: np.ndarray     # Loss area per node [m²] (lid excluded with headspace)
 ```
 
 **Key public methods:**
@@ -256,7 +291,7 @@ class ThermalStorage1D:
 |---|---|
 | `initialize(T_init, time)` | Creates `StorageState`; `T_init` can be scalar or array |
 | `step(state, dt, inputs)` | Core method: computes one timestep |
-| `max_stable_dt(m_dot_max)` | Maximum stable timestep [s] |
+| `max_stable_dt(m_dot_max)` | Largest timestep of the advective CFL condition [s] |
 | `check_cfl(dt, m_dot_max)` | CFL check, returns bool |
 | `get_stored_energy(state, T_ref)` | Stored energy [J] |
 | `get_soc(state, T_min, T_max)` | State of charge 0–1 |
@@ -285,7 +320,7 @@ tes = ThermalStorage1D(config)
 
 ## 5. Extension Points
 
-The model can be extended by implementing the abstract interfaces without modifying `thermal_energy_storage_model.py`:
+The model can be extended by implementing the abstract interfaces without modifying the package:
 
 ### Custom Geometry Model
 
@@ -303,14 +338,42 @@ config = StorageConfig(..., geometry=MyGeometry())
 
 ### Custom Loss Model
 
-```python
-class SeasonalLoss(LossModel):
-    def Q_loss_nodes(self, T_nodes, A_wall_nodes, z_node_centers) -> np.ndarray:
-        T_ground = self._seasonal_ground_temp(self.current_day)
-        return self.U_loss * A_wall_nodes * (T_ground - T_nodes)
+A steady-state loss model implements `Q_loss_nodes()`; set
+`air_temperature_attr` to the attribute that `StorageInputs.T_ambient`
+should replace (if the model has an air-exposed surface):
 
-config = StorageConfig(..., loss_model=SeasonalLoss(...))
+```python
+class AirLoss(LossModel):
+    air_temperature_attr = "T_air"
+
+    def __init__(self, U, T_air):
+        self.U, self.T_air = U, T_air
+
+    def Q_loss_nodes(self, T_nodes, A_wall_nodes, z_node_centers) -> np.ndarray:
+        return self.U * A_wall_nodes * (self.T_air - T_nodes)
+
+config = StorageConfig(..., loss_model=AirLoss(U=0.3, T_air=10.0))
 ```
+
+A model with internal state (history) keeps it in `StorageState.loss_state`,
+so that `step()` stays a function of the state:
+
+```python
+class MyTransientLoss(LossModel):
+    def initial_state(self, n_nodes) -> np.ndarray:
+        return np.full(n_nodes, 10.0)                 # e.g. wall temperatures
+
+    def Q_loss_nodes(self, T_nodes, A_wall_nodes, z, state) -> np.ndarray:
+        return self.G * A_wall_nodes * (state - T_nodes)
+
+    def advance(self, T_nodes, A_wall_nodes, z, dt, state) -> np.ndarray:
+        return state + dt * ...                       # new array, do not modify state
+```
+
+`TransientGroundLoss` is the built-in example. (Models that override only
+`advance(T, A, z, dt)` and keep their state inside the object still work,
+but such a state is not part of `StorageState`: stepping the same state twice
+then gives different results.)
 
 ### Custom Fluid Properties
 

@@ -20,7 +20,8 @@ Two checks per scenario:
   bit-identical. Only run on the platform the reference was recorded on:
   ``exp``/``pow`` from the platform math library may differ in the last ulp
   elsewhere. Scenarios solved with LAPACK (implicit heat exchangers) also
-  need the NumPy version of the reference.
+  need the NumPy version of the reference. ``GOLDEN_BITWISE=0`` skips the
+  check (CI runners: other CPUs, other SIMD code paths).
 * ``test_golden_master_tolerance`` -- checkpoint values agree within
   ``RTOL`` relative deviation on every platform.
 
@@ -32,6 +33,7 @@ reference only from code whose results are to be preserved
 from __future__ import annotations
 
 import functools
+import os
 
 import numpy as np
 import pytest
@@ -84,6 +86,8 @@ def test_golden_master_tolerance(sid):
 
 @pytest.mark.parametrize("sid", list(SCENARIOS))
 def test_golden_master_bitwise(sid):
+    if os.environ.get("GOLDEN_BITWISE", "1") == "0":
+        pytest.skip("bitwise comparison disabled (GOLDEN_BITWISE=0)")
     if platform_tag() != META["platform"]:
         pytest.skip(f"reference recorded on {META['platform']}, "
                     f"running on {platform_tag()}")

@@ -27,12 +27,14 @@ This document describes installation, quick start, all configuration options, an
 ## 1. Installation
 
 ```bash
-pip install numpy matplotlib
-# or:
+pip install -e .                          # model only (NumPy)
+pip install -e ".[examples,benchmark]"    # + matplotlib, pandas for the scripts
+pip install -e ".[ui]"                    # + PyQt6 for the interactive UI
+# or, without installing the package:
 pip install -r requirements.txt
 ```
 
-Requires Python ≥ 3.10.
+Requires Python ≥ 3.10 and NumPy ≥ 1.21.6.
 
 ---
 
@@ -187,12 +189,66 @@ inputs = StorageInputs(ports=[
 ```python
 outputs = storage.step(state, dt, inputs)
 
-# port_temperatures returns the node temperature at each port position.
-# Index corresponds to the order in inputs.ports.
+# port_temperatures: one value per port, in the order of inputs.ports.
 # For two_port() with charging only:
-#   ports[0] = charging inlet (inlet → T_in is given, port_temperatures shows node temp.)
-#   ports[1] = charging outlet (outlet → port_temperatures[1] is the outlet temperature)
+#   ports[0] = charging inlet  (storage temperature at the inlet, start of step)
+#   ports[1] = charging outlet (outlet temperature)
 T_charge_out = outputs.port_temperatures[1]
+```
+
+The outlet temperature is the temperature at which the fluid leaves during
+the step — the start-of-step node temperature for the explicit solver, the
+end-of-step one for the implicit solver. Where an inflow enters the same node
+(e.g. simultaneous charging and discharging through the top node with
+`two_port()`), the outflow takes the inflowing fluid first, as in a hydraulic
+header: with net charging the discharge outlet delivers the charging
+temperature. With these values the energy balance of every step closes:
+
+```python
+cp = 4187.0   # constant fluid properties
+dE = dt * (sum(p.m_dot * cp * p.T_in for p in inputs.ports if p.m_dot > 0)
+           + sum(p.m_dot * cp * T for p, T in zip(inputs.ports, outputs.port_temperatures)
+                 if p.m_dot < 0)
+           - outputs.Q_loss)
+# dE == storage.get_stored_energy(outputs.state) - storage.get_stored_energy(state)
+```
+
+### Time-Varying Ambient Temperature
+
+`StorageInputs.T_ambient` sets the air temperature for one step (e.g. from a
+weather file). It replaces the air-side temperature of the loss model —
+`ConstantAmbientLoss.T_ambient`, the lid temperature of `SplitAmbientLoss`
+and `TransientGroundLoss` — and the roof temperature of the headspace model;
+the configured loss model is not modified:
+
+```python
+for T_air in weather_temperatures:
+    inputs = StorageInputs.two_port(m_dot_charge=5.0, T_charge_in=85.0,
+                                    height=config.height, T_ambient=T_air)
+    state = storage.step(state, dt=3600.0, inputs=inputs).state
+```
+
+`GroundTemperatureLoss` has no air-exposed surface and ignores it. Other
+loss-model parameters (e.g. `T_far`, `T_surface`) are parameters, not state,
+and may be changed between steps.
+
+### Co-Simulation: Repeating a Step
+
+`step()` depends only on `(state, dt, inputs)` and the configuration and does
+not modify `state` — `StorageState` also holds the headspace temperature and
+the loss-model state (`loss_state`, the ground temperatures of
+`TransientGroundLoss`). A coupling master can therefore repeat a coupling
+step from the same state, e.g. in a fixed-point iteration:
+
+```python
+state0 = state
+for _ in range(max_iterations):
+    out = storage.step(state0, dt, inputs_from_network(T_supply))
+    T_supply_new = out.port_temperatures[3]          # discharge_out
+    if abs(T_supply_new - T_supply) < 1e-3:
+        break
+    T_supply = T_supply_new
+state = out.state                                    # accept the step
 ```
 
 ---
@@ -221,7 +277,7 @@ loss = SplitAmbientLoss(U_lid=0.151, U_wall=0.30, T_ambient=10.0)
 loss = SplitAmbientLoss(U_lid=0.151, U_wall=0.30, T_ambient=10.0, T_ambient_lid=8.0)
 ```
 
-Separate U-value for lid (air, membrane liner) and wall/bottom (ground). Recommended for PTES (pit thermal energy storage). `T_ambient` can be updated dynamically via `loss.T_ambient = t_amb`.
+Separate U-value for lid (air, membrane liner) and wall/bottom (ground). Recommended for PTES (pit thermal energy storage). `StorageInputs.T_ambient` sets the lid temperature per step; the wall/bottom temperature `T_ambient` can be changed between steps via `loss.T_ambient = t_ground`.
 
 ### GroundTemperatureLoss
 
@@ -253,15 +309,18 @@ loss = TransientGroundLoss(
 )
 ```
 
-Transient 1D RC ground network: per storage node, a chain of `n_layers` ground layers with thermal capacity. The ground state is updated each timestep using explicit Euler.
+Transient 1D RC ground network: per storage node, a chain of `n_layers` ground layers with thermal capacity. The ground temperatures are part of the storage state (`state.loss_state`, shape `(n_nodes, n_layers)`, initialized by `storage.initialize()`) and are updated each timestep with explicit Euler, sub-stepped automatically if the layers are thin.
 
 **Physical consistency:** Choose `d_total = lambda_soil / U_ss`. For Høje Taastrup: λ = 2.23 W/(m·K), U_wall = 0.30 W/(m²K) → d_total = 7.5 m, U_ss = 0.297 ≈ 0.30 ✓
 
 **When to use:** For long-term simulations where the ground heats up significantly (e.g. PTES with multi-year operation). For annual short simulations, the difference from `SplitAmbientLoss` is small (HT 2024: ΔMAE = 0.07 K).
 
-**Update time-varying lid temperature** during simulation:
+**Time-varying lid temperature:** pass it per step as
+`StorageInputs(..., T_ambient=current_t_amb)` (see section 4).
+
+**Ground temperatures** of the current state:
 ```python
-storage.config.loss_model.T_ambient_lid = current_t_amb
+T_ground = state.loss_state          # (n_nodes, n_layers) [°C]; row 0 (lid) unused
 ```
 
 ---
@@ -522,6 +581,11 @@ print(f"T_headspace: {outputs.T_headspace:.2f} °C")
 - The headspace temperature decreases through heat losses via the roof (`U_roof`)
 - Heat transfer from headspace → water raises the temperature of node 0
 - For large tanks (A_cross >> 1 m²), the thermal mass of the roof is very large → slow temperature change
+- The headspace equation is integrated exactly per step: any `dt` is stable,
+  also for a light gas-only headspace (`rho_headspace=1.2`, `cp_headspace=1005`)
+- The lid is not part of the top node's loss area (the lid path runs through
+  the headspace); the roof sees `StorageInputs.T_ambient` if given, else the
+  air-side temperature of the loss model, else `T_ambient`
 
 ### Output
 

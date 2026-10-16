@@ -81,69 +81,51 @@ class ThermalStorage1D:
     """
     1D model of a stratified hot-water thermal energy storage.
 
-    This model represents a cylindrical hot-water storage as a
-    one-dimensional layer stack. It is designed for use in
-    co-simulation environments with district-heating network solvers:
-    each timestep is computed individually, state is exchanged, and
-    network simulation outputs (mass flow rates, inlet temperatures)
-    are applied directly.
+    The storage is represented as a vertical stack of N layers (nodes) of a
+    cylindrical, truncated-cone or truncated-pyramid geometry. The model is
+    designed for co-simulation with district-heating network solvers: each
+    call of :meth:`step` advances one coupling interval from a given
+    :class:`StorageState` and the boundary conditions of that interval
+    (port mass flows and inlet temperatures, heat exchangers, ambient
+    temperature), and returns the outlet temperatures and the new state.
+    ``step()`` depends only on its arguments and the configuration, so any
+    state can be stepped again (rollback, iterative coupling).
 
     The model supports:
 
-        - **Simultaneous charging and discharging** via two separate
-            hydraulic loops (for example CHP feed-in + network supply)
-        - **Thermal stratification** through upwind discretization of the
-            advection term, preserving thermocline structure
-        - **Heat losses** through tank wall (shell + bottom + lid)
-        - **Heat conduction / diffusion** between neighboring layers with
-            effective thermal conductivity (including turbulent mixing)
-        - **CFL check** for numerical stability monitoring
+        - **Arbitrary hydraulic ports** at any height, simultaneous
+          charging and discharging, diffusor zones
+        - **Thermal stratification** with upwind or TVD (van Leer)
+          advection and buoyancy (convective adjustment)
+        - **Heat losses** through wall, lid and bottom (constant, split,
+          depth-dependent or transient ground loss models)
+        - **Heat conduction** between layers with an effective thermal
+          conductivity
+        - **Heat exchangers** (ε-NTU, lumped or segmented) and an optional
+          **headspace** above the water surface
+        - **Explicit or implicit** time integration; the explicit solver
+          sub-steps automatically to stay within its stability limit
 
     Physical model
     --------------
-    Energy balance for node i (i = 0 top, i = N-1 bottom):
+    Energy balance for node i (i = 0 top, i = N-1 bottom), with C_i the
+    node heat capacity:
 
-        m_k · c_p · dT_i/dt = Q_adv,i + Q_cond,i + Q_loss,i
+        C_i · dT_i/dt = Q_adv,i + Q_port,i + Q_cond,i + Q_loss,i + Q_hx,i
 
-    Advection term (upwind, net flow direction):
+    The port mass flows S_i (positive = inflow) define the flow across
+    interface j between nodes j-1 and j, F_j = S_0 + ... + S_{j-1}
+    (positive downward, F_0 = F_N = 0). Advection carries the upwind
+    temperature across each interface; inflow enters with its inlet
+    temperature, outflow leaves with the node temperature:
 
-        m_net = m_charge - m_discharge
+        Q_adv,i  = cp · (F_i · T_up,i − F_{i+1} · T_up,i+1)
+        Q_port,i = cp · (max(S_i, 0) · T_in,i + min(S_i, 0) · T_i)
+        Q_cond,i = K_{i-1} · (T_{i-1} − T_i) + K_i · (T_{i+1} − T_i)
 
-        Node 0 (top), m_net ≥ 0:
-            Q_adv,0 = m_charge · c_p · (T_charge_in - T_0)
-
-        Node 0 (top), m_net < 0:
-            Q_adv,0 = m_charge · c_p · T_charge_in
-                    + |m_net| · c_p · T_1
-                    - m_discharge · c_p · T_0
-
-        Interior node i, m_net > 0 (downward):
-            Q_adv,i = m_net · c_p · (T_{i-1} - T_i)
-
-        Interior node i, m_net < 0 (upward):
-            Q_adv,i = |m_net| · c_p · (T_{i+1} - T_i)
-
-        Node N-1 (bottom), m_net ≥ 0:
-            Q_adv,N-1 = m_net · c_p · T_{N-2}
-                      + m_discharge · c_p · T_discharge_in
-                      - m_charge · c_p · T_{N-1}
-
-        Node N-1 (bottom), m_net < 0:
-            Q_adv,N-1 = m_discharge · c_p · (T_discharge_in - T_{N-1})
-
-    Conduction term:
-
-        Q_cond,i = K_cond · (T_{i-1} - T_i) + K_cond · (T_{i+1} - T_i)
-        K_cond = λ_eff · A / Δz       [W/K]
-        λ_eff = lambda_eff_factor · lambda_fluid
-
-    Loss term:
-
-        Q_loss,i = U_loss · A_wall,i · (T_ambient - T_i)
-
-    Time integration (explicit Euler):
-
-        T_i(t + Δt) = T_i(t) + Δt · dT_i/dt
+    with K_j = λ_eff · A_j / Δz and λ_eff = lambda_eff_factor · lambda_fluid.
+    See ``docs/physics.md`` for the TVD correction, the loss models, heat
+    exchangers and the headspace.
 
     Parameters
     ----------
@@ -162,18 +144,20 @@ class ThermalStorage1D:
         >>> config = StorageConfig(volume=100.0, height=10.0, n_nodes=20)
         >>> storage = ThermalStorage1D(config)
         >>> state = storage.initialize(T_init=70.0)
-        >>> inputs = StorageInputs(
+        >>> inputs = StorageInputs.two_port(
         ...     m_dot_charge=6.0, T_charge_in=90.0,
-        ...     m_dot_discharge=4.0, T_discharge_in=50.0
+        ...     m_dot_discharge=4.0, T_discharge_in=50.0,
+        ...     height=config.height,
         ... )
         >>> outputs = storage.step(state, dt=60.0, inputs=inputs)
-        >>> print(f"Vorlauf: {outputs.T_discharge_out:.1f} °C")
-        >>> print(f"Charge return: {outputs.T_charge_out:.1f} °C")
+        >>> T_supply = outputs.port_temperatures[3]   # discharge_out (top)
+        >>> T_return = outputs.port_temperatures[1]   # charge_out (bottom)
 
-    Querying the optimal timestep size:
+    Querying the largest timestep allowed by the CFL condition:
 
         >>> dt_max = storage.max_stable_dt(m_dot_max=10.0)
-        >>> print(f"Recommended max timestep size: {dt_max:.0f} s")
+        >>> print(f"CFL-limited timestep: {dt_max:.0f} s")
+        CFL-limited timestep: 440 s
     """
 
     def __init__(self, config: StorageConfig) -> None:
@@ -225,14 +209,14 @@ class ThermalStorage1D:
 
         Examples
         --------
-        Freistehender Stahltank:
+        Above-ground steel tank:
 
             >>> tes = ThermalStorage1D.from_preset(
             ...     "steel_tank_aboveground",
             ...     volume=500.0, height=15.0,
             ... )
 
-        Erdbeckenspeicher:
+        Pit thermal energy storage:
 
             >>> tes = ThermalStorage1D.from_preset(
             ...     "ptes",
@@ -500,13 +484,16 @@ class ThermalStorage1D:
         --------
         Uniform initial profile:
 
+            >>> storage = ThermalStorage1D(StorageConfig(volume=100.0, height=10.0))
             >>> state = storage.initialize(T_init=70.0)
 
         Linear stratified profile (80 °C top, 40 °C bottom):
 
             >>> import numpy as np
-            >>> T_profile = np.linspace(80.0, 40.0, config.n_nodes)
+            >>> T_profile = np.linspace(80.0, 40.0, storage.n)
             >>> state = storage.initialize(T_init=T_profile)
+            >>> state.T_top, state.T_bottom
+            (80.0, 40.0)
         """
         if np.isscalar(T_init):
             # np.isscalar() isn't a type guard mypy understands, so T_init's
@@ -975,6 +962,8 @@ class ThermalStorage1D:
         --------
         Single timestep in simultaneous operation:
 
+            >>> config = StorageConfig(volume=100.0, height=10.0)
+            >>> storage = ThermalStorage1D(config)
             >>> state = storage.initialize(80.0)
             >>> inputs = StorageInputs.two_port(
             ...     m_dot_charge=5.0, T_charge_in=90.0,
@@ -984,14 +973,15 @@ class ThermalStorage1D:
             >>> out = storage.step(state, dt=60.0, inputs=inputs)
             >>> new_state = out.state  # pass to next step
 
-        Time loop for co-simulation:
+        Time loop for co-simulation (``get_network_inputs`` and
+        ``send_to_network`` stand for the network side)::
 
-            >>> state = storage.initialize(70.0)
-            >>> for t in range(0, 3600, 60):
-            ...     inputs = get_network_inputs(t)        # from network solver
-            ...     outputs = storage.step(state, dt=60.0, inputs=inputs)
-            ...     state = outputs.state
-            ...     send_to_network(outputs)              # to network solver
+            state = storage.initialize(70.0)
+            for t in range(0, 3600, 60):
+                inputs = get_network_inputs(t)        # from network solver
+                outputs = storage.step(state, dt=60.0, inputs=inputs)
+                state = outputs.state
+                send_to_network(outputs)              # to network solver
         """
         cfg = self.config
         T = state.temperatures.copy()
