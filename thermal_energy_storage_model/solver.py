@@ -495,13 +495,13 @@ class ThermalStorage1D:
             >>> state.T_top, state.T_bottom
             (80.0, 40.0)
         """
-        if np.isscalar(T_init):
-            # np.isscalar() isn't a type guard mypy understands, so T_init's
-            # static type is still float | np.ndarray here; it is a scalar
-            # at runtime by construction of this branch.
-            temps = np.full(self.n, float(cast(float, T_init)))
+        # Scalar or profile, decided on the converted array: no type narrowing
+        # of T_init is needed (np.isscalar() narrows only in newer NumPy stubs).
+        temps = np.asarray(T_init, dtype=float)
+        if temps.ndim == 0:
+            temps = np.full(self.n, float(temps))
         else:
-            temps = np.asarray(T_init, dtype=float).copy()
+            temps = temps.copy()
             if temps.shape != (self.n,):
                 raise ValueError(
                     f"T_init array must have length n_nodes={self.n}, "
