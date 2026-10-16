@@ -203,8 +203,10 @@ class StorageConfig:
     ``"implicit"``
         Fully implicit Euler method with upwind discretization (TDMA).
         Unconditionally stable for large timesteps. The tridiagonal solve
-        (Thomas algorithm) has O(N) complexity. Heat losses are treated
-        semi-implicitly (explicit linearization). Recommended for long
+        (Thomas algorithm) has O(N) complexity. Heat exchangers are part of
+        the implicit system (dense solve when present); wall heat losses
+        are treated semi-implicitly (explicit linearization), the headspace
+        exchange is integrated exactly per step. Recommended for long
         timesteps or very fine grids.
 
     Notes
@@ -232,23 +234,24 @@ class StorageConfig:
 
     auto_substep: bool = True
     """
-    Automatic CFL sub-stepping for the explicit solver.
+    Automatic sub-stepping for the explicit solver.
 
     Only relevant when ``solver="explicit"``. If the external timestep ``dt``
-    passed to :meth:`ThermalStorage1D.step` would violate the CFL condition
-    (CFL > 1), the step is internally split into the smallest number of
-    equal sub-steps that restores stability, and the sub-steps are integrated
-    sequentially. The publicly returned state advances by the full external
-    ``dt``.
+    passed to :meth:`ThermalStorage1D.step` would exceed the stability limit
+    of the explicit scheme -- the advective CFL condition (CFL <= 0.9) or the
+    combined limit CFL + conduction/heat-exchanger number <= 1 -- the step is
+    internally split into the smallest number of equal sub-steps that keeps
+    both, and the sub-steps are integrated sequentially. The publicly
+    returned state advances by the full external ``dt``.
 
     ``True`` (Standard)
         Sub-step automatically; the explicit solver stays stable for any
-        ``dt`` without the caller having to respect the CFL limit.
+        ``dt`` without the caller having to respect the stability limit.
 
     ``False``
-        No sub-stepping. A CFL violation only triggers a ``RuntimeWarning``
-        and the (potentially unstable) single explicit step is taken. Use
-        this to reproduce the raw single-step behaviour.
+        No sub-stepping. Exceeding the limit only triggers a
+        ``RuntimeWarning`` and the (potentially unstable) single explicit
+        step is taken. Use this to reproduce the raw single-step behaviour.
 
     The implicit solver (``solver="implicit"``) is unconditionally stable and
     ignores this flag.
@@ -289,13 +292,16 @@ class StorageConfig:
     Models a hot gas/vapor space above the water surface. The headspace has
     its own temperature ``T_headspace_init``, loses heat through the roof
     (``U_roof``), and exchanges heat with the top water node
-    (``h_headspace_water``).
+    (``h_headspace_water``). Its temperature is integrated exactly over each
+    step (stable for any timestep, also for a light gas-only headspace).
 
     ``False`` (Standard)
         No headspace model.
 
     ``True``
-        Headspace enabled.
+        Headspace enabled. The lid is then not part of the top node's loss
+        area: the water surface loses heat to the lid only through the
+        headspace.
     """
 
     T_headspace_init: float = 99.0
@@ -311,7 +317,7 @@ class StorageConfig:
     Headspace height (gas volume above water surface) [m].
 
     Determines thermal mass of the headspace:
-    ``C_hs = ρ_Luft · A_cross · H_headspace · cp_Luft``.
+    ``C_hs = rho_headspace · A_lid · H_headspace · cp_headspace``.
     Only relevant when ``headspace=True``. Default: 0.5 m.
     """
 
@@ -320,7 +326,7 @@ class StorageConfig:
     Heat transfer coefficient of the storage roof [W/(m²·K)].
 
     Determines heat loss from headspace to ambient:
-    ``Q_Dach = U_roof · A_cross · (T_hs - T_ambient)``.
+    ``Q_roof = U_roof · A_lid · (T_hs - T_ambient)``.
     Only relevant when ``headspace=True``. Default: 0.2 W/(m²·K).
     """
 
@@ -329,7 +335,7 @@ class StorageConfig:
     Heat transfer coefficient between headspace and water surface [W/(m²·K)].
 
     Determines heat exchange between hot headspace gas and top water node:
-    ``Q_hs→Wasser = h_hs · A_cross · (T_hs - T_top)``.
+    ``Q_hs→water = h_hs · A_lid · (T_hs - T_top)``.
     Typical range: 1-20 W/(m²·K) for natural gas-water convection.
     Only relevant when ``headspace=True``. Default: 5 W/(m²·K).
     """

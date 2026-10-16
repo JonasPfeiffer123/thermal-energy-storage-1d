@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Headspace model: the lid is no longer part of the top node's loss area
+  (the water surface lost heat through the lid twice: directly and through
+  the headspace and roof), and the exchange area is the lid area of the
+  geometry.
+- Explicit solver: sub-steps keep the Courant number at or below 0.9 (as
+  before) and, new, the combined stability number CFL + conduction /
+  heat-exchanger number at or below 1; where advection dominates the
+  sub-step count is unchanged. The end time after sub-steps is exactly
+  `t + dt` (was the sum of the sub-steps, off by up to 5e-6 s per year).
+  With `auto_substep=False` the warning names the combined number.
+- Golden master re-recorded (`tests/golden/reference.npz`): 120 of 133
+  scenarios are bit-identical; the other 13 are the explicit scenarios whose
+  old steps exceeded the stability limit (50 nodes; 20 nodes on the 4 m
+  pyramid and PTES), the heat-exchanger scenarios and the headspace scenario.
+  The bitwise check of the implicit heat-exchanger scenario (LAPACK) also
+  requires the NumPy version of the reference.
 - The `RuntimeWarning` for unbalanced port mass flows is emitted once per
   storage instead of on every step; it now also names the simulation time of
   the first unbalanced step. Its text contains the flow values, so Python's
@@ -35,12 +51,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   run takes 15 s instead of 24 s.
 
 ### Added
+- Tests: stability of heat exchangers, headspace, conduction-limited
+  sub-steps and thin ground layers.
 - `benchmark/benchmark_step_performance.py --loss {constant,split,transient}`
   selects the loss model of the benchmark scenario.
 - Bit-identity tests of `SplitAmbientLoss` and `TransientGroundLoss` against
   their former implementations (`tests/test_losses.py`).
 
 ### Fixed
+- Heat exchangers could heat the storage far beyond their inlet temperature
+  with long timesteps, also with the "unconditionally stable" implicit
+  solver, which evaluated them explicitly (300 L tank, `UA` = 2000 W/K,
+  70 °C inlet, one 1-h step: 153 °C). The implicit solver now includes them
+  in the implicit system (dense solve when heat exchangers are active), and
+  the explicit sub-step count includes their conductance; the external
+  outlet temperature is evaluated with the same temperatures as the heat.
+- The headspace temperature diverged with explicit Euler for a light
+  gas-only headspace (air, 10-min steps: 1e5 °C after one hour). It is now
+  integrated exactly per step; headspace, water and roof exchange exactly
+  the same energy.
+- The explicit solver ignored the conduction (Fourier) limit: on fine grids
+  with a large `lambda_eff_factor` the result was wrong by up to 23 K
+  without a warning (the buoyancy correction hid the instability).
+- `TransientGroundLoss` diverged for thin ground layers (40 layers over 2 m,
+  hourly steps: 1e39 °C); `advance()` sub-steps beyond the explicit limit
+  `R·C/2`.
 - `benchmark/hoje_taastrup_validation.py` reads the 2024 dataset from
   `data/HojeTaastrupData/Data/`, where the HojeTaastrupData repository now
   stores its CSV files.

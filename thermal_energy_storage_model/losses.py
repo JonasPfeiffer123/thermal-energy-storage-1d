@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 
 # ---------------------------------------------------------------------------
@@ -325,6 +327,10 @@ class TransientGroundLoss(LossModel):
     The lid node (index 0) is treated as steady-state because it is exposed
     to air and has no soil above it.
 
+    Explicit Euler is stable (and free of overshoot) for
+    ``dt ≤ R·C/2 = rho_soil·cp_soil·d_layer² / (2·lambda_soil)``; longer
+    timesteps are split into equal sub-steps (:meth:`substeps`).
+
     Physical model (per storage node i, ground layers j=1…n_layers)
     ----------------------------------------------------------------
     Thermal resistance per area:  R = d_layer / lambda_soil  [K·m²/W]
@@ -427,6 +433,12 @@ class TransientGroundLoss(LossModel):
             self._T_ground = Tg
         return Tg
 
+    def substeps(self, dt: float) -> int:
+        """Number of explicit Euler sub-steps :meth:`advance` uses for ``dt``."""
+        # Every layer couples to two neighbours through R: the explicit update
+        # keeps the old value with weight 1 - 2·dt/(R·C) >= 0.
+        return max(1, math.ceil(2.0 * dt / (self._R * self._C)))
+
     def Q_loss_nodes(
         self,
         T_nodes: np.ndarray,
@@ -459,28 +471,33 @@ class TransientGroundLoss(LossModel):
         dt: float,
     ) -> None:
         """
-        Explicit Euler step for all ground layers.
+        Explicit Euler step for all ground layers, split into
+        :meth:`substeps` equal sub-steps beyond the stability limit.
 
+        The storage temperatures ``T_nodes`` are held for the whole step.
         Node 0 (lid) is not treated transiently.
         """
         del A_wall_nodes, _z_node_centers
         Tg = self._ensure_init(len(T_nodes))   # (n_nodes, n_layers)
         R = self._R
+        n_sub = self.substeps(dt)
+        dt_sub = dt / n_sub
 
         # Wall/bottom rows only: the lid row (node 0) is not updated
         # (steady-state loss model). All layers advance at once from the old
         # field; same per-element operations as a layer-by-layer update.
         G = Tg[1:]
-        # Left temperature (closer to storage)
         T_left = np.empty_like(G)
-        T_left[:, 0] = T_nodes[1:]
-        T_left[:, 1:] = G[:, :-1]
-        # Right temperature (toward far field)
         T_right = np.empty_like(G)
-        T_right[:, :-1] = G[:, 1:]
-        T_right[:, -1] = self.T_far
+        for _ in range(n_sub):
+            # Left temperature (closer to storage)
+            T_left[:, 0] = T_nodes[1:]
+            T_left[:, 1:] = G[:, :-1]
+            # Right temperature (toward far field)
+            T_right[:, :-1] = G[:, 1:]
+            T_right[:, -1] = self.T_far
 
-        G += (dt / self._C) * ((T_left - G) / R - (G - T_right) / R)
+            G += (dt_sub / self._C) * ((T_left - G) / R - (G - T_right) / R)
 
     @property
     def T_ground(self) -> np.ndarray | None:
