@@ -32,6 +32,9 @@ class StorageState:
 
     Notes
     -----
+    The state is complete: ``ThermalStorage1D.step()`` reads nothing else
+    that changes over time and never modifies the state passed in, so a
+    state can be stepped again (rollback, iterative coupling, predictions).
     The temperature profile is internally stored as a numpy array. The
     `copy()` method returns a deep copy so state updates do not affect
     previous states.
@@ -40,9 +43,9 @@ class StorageState:
     --------
         >>> import numpy as np
         >>> state = StorageState(temperatures=np.linspace(80, 40, 20), time=3600.0)
-        >>> state.temperatures[0]   # Top temperature
+        >>> state.T_top      # temperatures[0], top layer
         80.0
-        >>> state.temperatures[-1]  # Bottom temperature
+        >>> state.T_bottom   # temperatures[-1], bottom layer
         40.0
     """
 
@@ -61,6 +64,16 @@ class StorageState:
     temperature profile.
     """
 
+    loss_state: np.ndarray | None = field(default=None, repr=False)
+    """
+    Internal state of the loss model, e.g. the ground temperatures
+    ``(n_nodes, n_layers)`` [°C] of ``TransientGroundLoss``.
+
+    ``None`` for loss models without internal state. ``initialize()`` sets
+    the initial value; a state built without it starts the loss model from
+    its initial state.
+    """
+
     def copy(self) -> StorageState:
         """
         Return a deep copy of the state.
@@ -74,6 +87,7 @@ class StorageState:
             temperatures=self.temperatures.copy(),
             time=self.time,
             T_headspace=self.T_headspace,
+            loss_state=None if self.loss_state is None else self.loss_state.copy(),
         )
 
     @property
@@ -159,6 +173,17 @@ class StorageInputs:
     hx_ports: list = field(default_factory=list)
     """List of heat exchanger ports [HeatExchangerPort]. Empty = no active HX."""
 
+    T_ambient: float | None = None
+    """
+    Ambient air temperature for this timestep [°C] (e.g. from a weather file).
+
+    Replaces the air-side temperature of the loss model for this step
+    (``ConstantAmbientLoss.T_ambient``, ``SplitAmbientLoss.T_ambient_lid``,
+    ``TransientGroundLoss.T_ambient_lid``; ``GroundTemperatureLoss`` has no
+    air-exposed surface) and the roof temperature of the headspace model.
+    ``None`` (default): the temperatures configured in the loss model.
+    """
+
     @classmethod
     def two_port(
         cls,
@@ -171,6 +196,7 @@ class StorageInputs:
         z_charge_out: float | None = None,
         z_discharge_in: float | None = None,
         z_discharge_out: float | None = None,
+        T_ambient: float | None = None,
     ) -> StorageInputs:
         """
         Convenience constructor for classic two-loop operation.
@@ -201,6 +227,9 @@ class StorageInputs:
             Discharging inlet height [m]. Default: 0.0 (bottom).
         z_discharge_out : float, optional
             Discharging outlet height [m]. Default: ``height`` (lid).
+        T_ambient : float, optional
+            Ambient air temperature for this step [°C], see
+            :attr:`StorageInputs.T_ambient`. Default: ``None``.
 
         Returns
         -------
@@ -230,7 +259,7 @@ class StorageInputs:
                               label="discharge_in"))
             ports.append(Port(z=z_do, m_dot=-m_dot_discharge,
                               label="discharge_out"))
-        return cls(ports=ports)
+        return cls(ports=ports, T_ambient=T_ambient)
 
 
 @dataclass
@@ -245,28 +274,37 @@ class StorageOutputs:
     Parameters
     ----------
     port_temperatures : list[float]
-                Storage node temperature at each port height [°C].
+                Temperature at each port [°C].
                 Order matches the port list in ``StorageInputs.ports``.
 
-                - For **outlet ports** (m_dot < 0): this is the actual
-                    fluid outlet temperature (upwind from storage).
-                - For **inlet ports** (m_dot > 0): this is the local
-                    storage temperature at the inlet point (useful to compute
-                    heat flow Q = ṁ · cp · (T_in − T_node)).
+                - For **outlet ports** (m_dot < 0): the outlet temperature,
+                    i.e. the temperature at which the fluid leaves the
+                    storage during the step. The explicit solver takes it
+                    from the start-of-step profile, the implicit solver from
+                    the end-of-step profile (before the buoyancy correction).
+                    Where an inflow enters the same node, the outflow takes
+                    the inflowing fluid first (as in a hydraulic header).
+                - For **inlet ports** (m_dot > 0): the local storage
+                    temperature at the inlet at the start of the step.
 
     Q_loss : float
-                Total heat loss from storage to ambient [W].
+                Total heat loss from storage to ambient [W] during the step.
                 Positive = outward loss (storage cools down).
     state : StorageState
                 New storage state at the end of the timestep.
 
     Notes
     -----
-    Heat flow of an individual port can be computed from
-    ``port_temperatures``:
+    The outputs close the energy balance of the step. With constant fluid
+    properties (``cp``)::
 
-        Inlet (m_dot > 0):  Q = m_dot · cp · (T_in   − T_node)
-        Outlet (m_dot < 0): Q = m_dot · cp · (T_node − T_sink)
+        ΔE = dt · (Σ_inlets  ṁ·cp·T_in
+                   − Σ_outlets |ṁ|·cp·T_out
+                   + Σ_hx ṁ_ext·cp_ext·(T_ext_in − T_ext_out)
+                   − Q_loss)
+
+    with ``ΔE`` the change of ``ThermalStorage1D.get_stored_energy()`` and
+    the headspace exchange as additional term when that model is active.
 
     For the classic two-loop case, ``port_temperatures`` follows the
     port order created by :meth:`StorageInputs.two_port`:
@@ -274,10 +312,10 @@ class StorageOutputs:
     """
 
     port_temperatures: list
-    """Node temperatures at port positions [°C], one value per port."""
+    """Port temperatures [°C] (outlet temperature for outlet ports)."""
 
     Q_loss: float
-    """Heat loss to ambient [W]."""
+    """Heat loss to ambient during the step [W]."""
 
     state: StorageState
     """Storage state at the end of the timestep."""

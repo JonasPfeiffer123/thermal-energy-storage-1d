@@ -101,11 +101,11 @@ class WaterProperties(FluidProperties):
     Examples
     --------
         >>> fluid = WaterProperties()
-        >>> fluid.rho(70.0)    # → ~977.8 kg/m³
-        >>> fluid.cp(70.0)     # → ~4186.9 J/(kg·K)
-        >>> import numpy as np
+        >>> print(f"{fluid.rho(70.0):.1f} kg/m³, {fluid.cp(70.0):.1f} J/(kg·K)")
+        977.8 kg/m³, 4189.0 J/(kg·K)
         >>> T = np.array([20.0, 60.0, 90.0])
-        >>> fluid.rho(T)       # → array(...)
+        >>> [round(float(rho), 1) for rho in fluid.rho(T)]
+        [999.8, 983.2, 965.4]
     """
 
     # Polynomial coefficients (c2, c1, c0) of c2·T² + c1·T + c0, T in °C

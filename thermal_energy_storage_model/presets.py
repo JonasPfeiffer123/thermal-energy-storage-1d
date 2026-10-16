@@ -219,6 +219,7 @@ class StoragePresets:
             ...     burial_depth=0.5, T_surface=8.0,
             ... )
             >>> print(f"Volume: {config.geometry.volume:.0f} m³")
+            Volume: 107207 m³
         """
         geom = TruncatedConeGeometry(
             r_bottom=r_bottom, r_top=r_top, height=height

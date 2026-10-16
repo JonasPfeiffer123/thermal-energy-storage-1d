@@ -426,6 +426,33 @@ inputs = StorageInputs.two_port(
 )
 ```
 
+### Outlet Temperatures and Energy Balance at the Ports
+
+Each node receives the **net** flow of all ports mapped to it,
+$S_i = \dot{m}_{\text{in},i} - \dot{m}_{\text{out},i}$. Inflow and outflow at
+the same node therefore exchange fluid directly, as in a hydraulic header
+(the storage of a parallel-connected network sees only the net flow): the
+outflow takes the inflowing fluid first. The outlet temperature reported for
+an outlet port is the temperature at which its fluid leaves the node,
+
+$$T_\text{out,i} = \begin{cases} T_{\text{in},i} & S_i \ge 0 \\[2pt]
+\dfrac{\dot{m}_{\text{in},i}\,T_{\text{in},i} - S_i\,T_i}{\dot{m}_{\text{in},i} - S_i} & S_i < 0 \end{cases}$$
+
+with $T_{\text{in},i}$ the mass-flow-weighted inlet temperature and $T_i$ the
+node temperature at which the scheme lets fluid leave — the start-of-step
+value for the explicit solver, the end-of-step value (before the buoyancy
+correction) for the implicit solver. Without inflow at the node this is just
+$T_i$. With these outlet temperatures the outputs of every step close the
+energy balance exactly (constant fluid properties):
+
+$$\Delta E = \Delta t \left( \sum_\text{inlets} \dot{m}\,c_p\,T_\text{in}
+- \sum_\text{outlets} |\dot{m}|\,c_p\,T_\text{out}
++ \sum_\text{HX} \dot{m}_\text{ext}\,c_{p,\text{ext}}\,(T_\text{ext,in} - T_\text{ext,out})
+- \dot{Q}_\text{loss} \right)$$
+
+so a co-simulation partner that books the port enthalpy flows neither creates
+nor loses energy at the coupling interface.
+
 ### Port Model Limitations
 
 The port model assumes ideal flow distribution (plug flow) at the inlet. Weiss et al. [2021] show by CFD that real inlet diffusors lead to a significantly thicker thermocline than the idealised 1D model: the difference is a factor > 2. This systematic underestimation of thermocline thickness is an inherent limitation of all 1D models and must be considered when making accuracy statements.
@@ -469,6 +496,18 @@ at the profile-mean temperature** `T̄`, not node-wise. For water over a typical
 terms; for fluids with strongly temperature-dependent `cp`/`λ`, or across a very
 wide thermocline, a node-wise evaluation would be more accurate.
 
+**Limitation — energy accounting with `WaterProperties`.** The node volumes
+are fixed while the port mass flows are balanced, so the mass in a node of
+temperature-dependent density is not conserved exactly, and advection uses
+the profile-mean `cp`. The stored energy
+$E = \sum_k \rho(T_k)\,V_k\,c_p(T_k)\,(T_k - T_\text{ref})$
+(`get_stored_energy()`) then follows the port enthalpy flows only
+approximately: in a 8-h charging test with a 40 K temperature swing the two
+differ by about 3 % of the throughput. With `ConstantFluidProperties` the
+balance is exact; use those for energy balances that must close. The state of
+charge uses the stored energy of the tank uniformly at `T_max` (properties at
+`T_max`) as reference, so a fully charged tank has SOC = 1 with either model.
+
 ---
 
 ## 10. Numerical Time Integration and Stability
@@ -477,9 +516,11 @@ wide thermocline, a node-wise evaluation would be more accurate.
 
 Time integration uses the **explicit Euler method**:
 
-$$T_i(t + \Delta t) = T_i(t) + \frac{\Delta t}{m_k \cdot c_p} \cdot \left(\dot{Q}_{\text{adv},i} + \dot{Q}_{\text{cond},i} + \dot{Q}_{\text{loss},i}\right)$$
+$$T_i(t + \Delta t) = T_i(t) + \frac{\Delta t}{m_k \cdot c_p} \cdot \left(\dot{Q}_{\text{adv},i} + \dot{Q}_{\text{cond},i} + \dot{Q}_{\text{loss},i} + \dot{Q}_{\text{hx},i}\right)$$
 
-The explicit Euler method is simple and efficient but requires the CFL stability condition to be satisfied.
+The explicit Euler method is simple and efficient but stable only within a
+timestep limit: the CFL condition of advection and the limit of the
+conduction and heat-exchanger terms (see below).
 
 ### CFL Stability Condition
 
@@ -512,7 +553,30 @@ config = StorageConfig(..., solver="explicit", auto_substep=True)   # default
 outputs = storage.step(state, dt=3600.0, inputs=inputs)             # any dt is stable
 ```
 
-Setting `auto_substep=False` disables this: a CFL violation then only emits a `RuntimeWarning` and the single (potentially unstable) explicit step is taken — useful for reproducing the raw single-step behaviour. The implicit solver is unconditionally stable and ignores this flag.
+### Combined Stability Limit (Conduction, Heat Exchangers)
+
+The explicit update of node $i$ keeps its old temperature with the weight
+
+$$1 - \underbrace{\frac{\Delta t\,c_p\,\dot{m}_\text{out,i}}{C_i}}_{\text{CFL}}
+- \underbrace{\frac{\Delta t\,(K_{i-1} + K_i + G_{\text{hx},i} + G_{\text{hs},i})}{C_i}}_{\text{conduction, HX, headspace}}$$
+
+with the conduction conductances $K$, the heat-exchanger conductance acting
+on the node ($G_\text{hx} = \varepsilon\,C_\text{ext}\,w_k$ lumped,
+$\varepsilon_s\,C_\text{ext}$ segmented) and the headspace coupling of the top
+node ($h_\text{hs}\,A_\text{lid}$). The scheme is stable and free of overshoot
+while this weight is non-negative. On fine grids with a large
+`lambda_eff_factor` the conduction term alone can exceed 1 (Fourier limit
+$\Delta t \le \Delta z^2 / (2\alpha_\text{eff})$); without flow the CFL
+number is zero. The sub-step count therefore keeps **both**
+
+$$\text{CFL} \le 0.9 \qquad \text{and} \qquad \text{CFL} + \frac{\Delta t\,\max_i (K_{i-1} + K_i + G_{\text{hx},i} + G_{\text{hs},i})}{C_i} \le 1 .$$
+
+The first condition is the CFL criterion above (unchanged); the second only
+adds sub-steps where conduction or a strong heat exchanger require them.
+Wall losses are not part of the criterion (their conductance is many orders
+of magnitude below the node capacity for any realistic insulation).
+
+Setting `auto_substep=False` disables sub-stepping: exceeding the limit then only emits a `RuntimeWarning` and the single (potentially unstable) explicit step is taken — useful for reproducing the raw single-step behaviour. The implicit solver is unconditionally stable and ignores this flag.
 
 ### Implicit Solver (TDMA)
 
@@ -520,9 +584,19 @@ For very large timesteps (e.g. hourly values without sub-stepping), a **fully im
 
 The fully implicit energy balance for node i is:
 
-$$\frac{C_i}{\Delta t}(T_i^{\text{new}} - T_i) = Q_{\text{adv},i}^{\text{impl}} + Q_{\text{cond},i}^{\text{impl}} + Q_{\text{loss},i}^{\text{expl}}$$
+$$\frac{C_i}{\Delta t}(T_i^{\text{new}} - T_i) = Q_{\text{adv},i}^{\text{impl}} + Q_{\text{cond},i}^{\text{impl}} + Q_{\text{hx},i}^{\text{impl}} + Q_{\text{loss},i}^{\text{expl}} + Q_{\text{hs},i}$$
 
 The resulting **tridiagonal system** (structure: $a_i T_{i-1}^{\text{new}} + d_i T_i^{\text{new}} + c_i T_{i+1}^{\text{new}} = b_i$) is solved with the **Thomas algorithm (TDMA)** in O(N).
+
+Heat exchangers are linear in the storage temperatures and are part of the
+implicit system as well, so a heat exchanger can never heat (or cool) the
+storage beyond its inlet temperature, for any timestep. Their couplings reach
+across the HX zone (lumped: all zone nodes through the zone mean; segmented:
+each node through the external fluid that passed the nodes before), outside
+the tridiagonal band; with active HX ports the system is therefore solved as
+a dense system (`numpy.linalg.solve`, negligible cost for the node counts
+used). Wall losses stay explicitly linearized (start-of-step temperatures),
+the headspace exchange is integrated exactly (section 15).
 
 ```python
 config = StorageConfig(..., solver="explicit")   # default
@@ -620,6 +694,14 @@ $$\dot{Q}_{\text{loss},i} = A_{\text{wall},i} \cdot \frac{T_{g,i,1} - T_{\text{s
 
 The lid node continues to be treated as stationary (no ground above the lid).
 
+The ground temperatures are part of the storage state
+(`StorageState.loss_state`, shape `(n_nodes, n_layers)`), so a state can be
+stepped again (rollback, iterative coupling) with the same result. They are
+advanced with explicit Euler, which is stable for
+$\Delta t \le R\,C/2 = \rho_\text{soil}\,c_{p,\text{soil}}\,d_\text{layer}^2 / (2\lambda_\text{soil})$;
+longer timesteps are split into equal sub-steps (thin layers: e.g. 5 cm of
+clay till allow about 900 s).
+
 ```python
 loss_model = TransientGroundLoss(
     U_lid=0.151, T_ambient_lid=10.0,
@@ -674,7 +756,7 @@ $$\text{NTU} = \frac{UA}{\dot{m}_\text{ext} \cdot c_{p,\text{ext}}}, \qquad \var
 
 $$\dot{Q} = \varepsilon \cdot \dot{m}_\text{ext} \cdot c_{p,\text{ext}} \cdot (T_\text{ext,in} - \bar{T}_\text{tank})$$
 
-Here $\bar{T}_\text{tank}$ is the area-weighted mean of storage temperatures in the active heat exchanger zone $[z - H_{HX}/2,\; z + H_{HX}/2]$.
+Here $\bar{T}_\text{tank}$ is the mean storage temperature of the nodes in the active heat exchanger zone $[z - H_{HX}/2,\; z + H_{HX}/2]$ (equal weights $w_k$); the heat is distributed with the same weights.
 
 **Symbols:**
 
@@ -739,6 +821,18 @@ hx = HeatExchangerPort(
 )
 ```
 
+### Time Integration
+
+Both modes are linear in the storage temperatures. The implicit solver
+evaluates them at the end of the step (section 10): the storage approaches
+$T_\text{ext,in}$ but never passes it, for any timestep, and
+$T_\text{ext,out}$ is evaluated from the same end-of-step temperatures, so the
+reported outlet temperature matches the transferred heat. The explicit solver
+evaluates them at the start of each sub-step and includes the HX conductance
+in its sub-step criterion. (Evaluated explicitly over a whole coupling
+interval, a strong heat exchanger on a small tank overshoots: a 300 L tank
+with $UA$ = 2000 W/K and a 70 °C inlet would reach 153 °C within one hour.)
+
 ---
 
 ## 15. Headspace Model
@@ -749,17 +843,34 @@ In pressureless tanks or partially filled vessels, a **gas cushion** (headspace)
 
 ### Headspace Energy Balance
 
-The headspace is integrated as a single homogeneous control volume with explicit Euler:
+The headspace is a single homogeneous control volume above the water surface, with the lid area $A$:
 
-$$C_\text{hs} \cdot \frac{dT_\text{hs}}{dt} = -\underbrace{U_\text{roof} \cdot A \cdot (T_\text{hs} - T_\text{amb})}_{\dot{Q}_\text{roof}\ \text{(loss to outside)}} - \underbrace{h_\text{hs} \cdot A \cdot (T_\text{hs} - T[0])}_{\dot{Q}_\text{hs,water}\ \text{(to top node)}}$$
+$$C_\text{hs} \cdot \frac{dT_\text{hs}}{dt} = -\underbrace{U_\text{roof} \cdot A \cdot (T_\text{hs} - T_\text{roof})}_{\dot{Q}_\text{roof}\ \text{(loss to outside)}} - \underbrace{h_\text{hs} \cdot A \cdot (T_\text{hs} - T[0])}_{\dot{Q}_\text{hs,water}\ \text{(to top node)}}$$
 
-The term $\dot{Q}_\text{hs,water}$ is added as a source term to the topmost water node (index 0).
+For a fixed top-node temperature over the step this linear equation is
+integrated exactly: $T_\text{hs}$ relaxes towards
+
+$$T_\text{eq} = \frac{U_\text{roof}\,T_\text{roof} + h_\text{hs}\,T[0]}{U_\text{roof} + h_\text{hs}}, \qquad \tau = \frac{C_\text{hs}}{(U_\text{roof} + h_\text{hs})\,A},$$
+
+$T_\text{hs}(\Delta t) = T_\text{eq} + (T_\text{hs,0} - T_\text{eq})\,e^{-\Delta t/\tau}$.
+This is stable for any timestep, also for a light gas-only headspace
+(air: $\tau$ of a few minutes, where explicit Euler diverged for 10-min
+steps). The step mean of $\dot{Q}_\text{hs,water}$ is added as a source term to
+the topmost water node (index 0), so headspace, water and roof exchange
+exactly the same energy.
+
+With the headspace active, the lid is not part of the top node's loss area
+(the water surface loses heat to the lid only through the headspace), and the
+roof temperature $T_\text{roof}$ is `StorageInputs.T_ambient` if given, else
+the air-side temperature of the loss model, else `StorageConfig.T_ambient`.
 
 **Symbols:**
 
 | Symbol | Meaning | Unit |
 |---|---|---|
 | $C_\text{hs} = \rho_\text{hs} \cdot A \cdot H_\text{hs} \cdot c_{p,\text{hs}}$ | Thermal mass of the headspace | J/K |
+| $A$ | Lid area (top cross-section of the geometry) | m² |
+| $T_\text{roof}$ | Ambient temperature above the roof | °C |
 | $U_\text{roof}$ | Overall heat transfer coefficient of the roof | W/(m²·K) |
 | $h_\text{hs}$ | Convective HTC headspace to water surface | W/(m²·K) |
 | $H_\text{hs}$ | Height of the headspace | m |

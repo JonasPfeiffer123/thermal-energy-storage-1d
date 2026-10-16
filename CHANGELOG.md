@@ -8,6 +8,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Breaking:** `StorageState` is the complete simulation state. The ground
+  temperatures of `TransientGroundLoss` moved from the loss-model object into
+  the new field `StorageState.loss_state` (shape `(n_nodes, n_layers)`, set by
+  `initialize()`). `step()` now depends only on `(state, dt, inputs)` and the
+  configuration: stepping the same state twice gives the same result
+  (rollback, iterative coupling), which it did not before.
+  `TransientGroundLoss.T_ground` is removed (use `state.loss_state`);
+  `Q_loss_nodes()` and `advance()` take the ground field as an extra
+  argument, and `advance()` returns the new field instead of modifying it.
+  New `LossModel.initial_state()` for loss models with state; custom models
+  that keep a state inside the object (overriding only `advance()`) still
+  run, with that state outside `StorageState`. Because of this API change
+  the next release is a major version.
+- **Breaking (results):** outlet port temperatures are the temperatures at
+  which the model removes the outflowing energy, so the step outputs close
+  the energy balance at the coupling interface. Where an inflow enters the
+  same node (e.g. simultaneous charging and discharging through the top node
+  with `two_port()`), the outflow takes the inflowing fluid first, as in a
+  hydraulic header; before, the outlet reported the node temperature while
+  the energy balance had removed the inlet temperature (golden master: up to
+  48 K in hours of simultaneous operation). With the implicit solver the
+  outlet reports the end-of-step temperature, at which the outflow leaves
+  (`tests/test_regression.py`: 78.00 → 73.05 °C). Inlet ports report the
+  start-of-step node temperature as before.
+- `StorageOutputs.Q_loss` is the loss applied in the step.
+  `TransientGroundLoss` reported the loss of the ground field after the
+  step (golden master: up to 16 W in 18 scenarios).
+- `get_soc()` takes the full-charge energy with the fluid properties at
+  `T_max` (was the nominal `rho`/`cp`): a tank uniformly at `T_max` has
+  SOC = 1 also with `WaterProperties` (was 0.9916 at 90 °C).
+- Headspace model: the lid is no longer part of the top node's loss area
+  (the water surface lost heat through the lid twice: directly and through
+  the headspace and roof), the roof sees the air-side temperature of the loss
+  model (was always `StorageConfig.T_ambient`), and the exchange area is the
+  lid area of the geometry.
+- Explicit solver: sub-steps keep the Courant number at or below 0.9 (as
+  before) and, new, the combined stability number CFL + conduction /
+  heat-exchanger number at or below 1; where advection dominates the
+  sub-step count is unchanged. The end time after sub-steps is exactly
+  `t + dt` (was the sum of the sub-steps, off by up to 5e-6 s per year).
+  With `auto_substep=False` the warning names the combined number.
+- Golden master re-recorded (`tests/golden/reference.npz`). Temperatures are
+  bit-identical in 120 of 133 scenarios; the other 13 are the explicit
+  scenarios whose old steps exceeded the stability limit (50 nodes; 20 nodes
+  on the 4 m pyramid and PTES), the heat-exchanger scenarios and the
+  headspace scenario. SOC changed only with `WaterProperties`. The bitwise
+  check of the implicit heat-exchanger scenario (LAPACK) also requires the
+  NumPy version of the reference; `GOLDEN_BITWISE=0` disables the bitwise
+  check (CI).
+- Validation results unchanged: `benchmark/dronninglund_validation.py` and
+  `benchmark/hoje_taastrup_validation.py` produce byte-identical comparison
+  CSVs (MAE 4.65 K; 2.08 / 2.15 K).
+- `ThermalStorage1D.step()` costs the same within the measurement noise
+  (±5 %, A/B in one process), including the new input checks.
+- NumPy is the only required dependency (`numpy>=1.21.6`, tested with
+  Python 3.10); matplotlib moved to the extras `examples`, `benchmark`
+  (with pandas, needed by the validation scripts and not declared before)
+  and `ui`. `requirements*.txt` list the same packages.
+- `pytest` also runs the docstring examples (`--doctest-modules`); all
+  examples run, the class example of `ThermalStorage1D` used a removed API.
+- `benchmark/results/model_variants/` regenerated with the current code
+  (`--no-freetttes`); without the FreeTTES reference no configuration is
+  recommended (the committed text recommended N=2, the coarsest grid).
+- Docstrings: German leftovers translated, `geometry.py` without BOM.
 - The `RuntimeWarning` for unbalanced port mass flows is emitted once per
   storage instead of on every step; it now also names the simulation time of
   the first unbalanced step. Its text contains the flow values, so Python's
@@ -35,12 +99,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   run takes 15 s instead of 24 s.
 
 ### Added
+- `StorageInputs.T_ambient` (also `two_port(T_ambient=...)`): ambient air
+  temperature for one step, e.g. from a weather file. It replaces the
+  air-side temperature of the loss model (`ConstantAmbientLoss.T_ambient`,
+  the lid temperature of `SplitAmbientLoss` and `TransientGroundLoss`;
+  `LossModel.air_temperature_attr`, `with_air_temperature()`) and the
+  headspace roof temperature, without modifying the configured loss model.
+- Input validation: `step()` rejects a non-positive or non-finite `dt`, a
+  state of another storage, non-finite port values, negative heat-exchanger
+  flows or UA and unknown `flow_direction`; the configuration rejects NaN,
+  non-integer `n_nodes` and invalid headspace / `T_ground` parameters
+  (`ValueError`, `TypeError` for `n_nodes`).
+- Tests: energy balance of the step outputs for simultaneous operation,
+  diffusors, heat exchangers and `TransientGroundLoss`
+  (`tests/test_conservation.py`); the co-simulation contract
+  (`tests/test_cosim_contract.py`); stability of heat exchangers, headspace,
+  conduction-limited sub-steps and thin ground layers.
+- CI: Windows next to Ubuntu, Python 3.14, a job with the oldest supported
+  NumPy on Python 3.10, and a smoke test of the example and benchmark
+  scripts.
 - `benchmark/benchmark_step_performance.py --loss {constant,split,transient}`
   selects the loss model of the benchmark scenario.
 - Bit-identity tests of `SplitAmbientLoss` and `TransientGroundLoss` against
   their former implementations (`tests/test_losses.py`).
 
 ### Fixed
+- Heat exchangers could heat the storage far beyond their inlet temperature
+  with long timesteps, also with the "unconditionally stable" implicit
+  solver, which evaluated them explicitly (300 L tank, `UA` = 2000 W/K,
+  70 °C inlet, one 1-h step: 153 °C). The implicit solver now includes them
+  in the implicit system (dense solve when heat exchangers are active), and
+  the explicit sub-step count includes their conductance; the external
+  outlet temperature is evaluated with the same temperatures as the heat.
+- The headspace temperature diverged with explicit Euler for a light
+  gas-only headspace (air, 10-min steps: 1e5 °C after one hour). It is now
+  integrated exactly per step; headspace, water and roof exchange exactly
+  the same energy.
+- The explicit solver ignored the conduction (Fourier) limit: on fine grids
+  with a large `lambda_eff_factor` the result was wrong by up to 23 K
+  without a warning (the buoyancy correction hid the instability).
+- `TransientGroundLoss` diverged for thin ground layers (40 layers over 2 m,
+  hourly steps: 1e39 °C); `advance()` sub-steps beyond the explicit limit
+  `R·C/2`.
+- The UI sub-stepped the explicit solver a second time, and the implicit
+  solver for no reason; it now leaves stability to the model.
 - `benchmark/hoje_taastrup_validation.py` reads the 2024 dataset from
   `data/HojeTaastrupData/Data/`, where the HojeTaastrupData repository now
   stores its CSV files.

@@ -1,6 +1,5 @@
-# Additional dependencies for the PyQt6 user interface
-# Core model dependencies are listed in requirements.txt
-
+# Dependencies of the PyQt6 user interface (run_ui.py, ui/).
+# Equivalent: pip install -e ".[ui]"
+numpy>=1.21.6
 PyQt6>=6.4.0
 matplotlib>=3.7.0
-numpy>=1.20
