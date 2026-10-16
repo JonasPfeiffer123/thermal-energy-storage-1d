@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `mypy` 2.4 reports the `cast` in `ThermalStorage1D.initialize()` as
+  redundant (newer NumPy stubs narrow `np.isscalar()`), which failed the CI
+  lint job. `initialize()` now decides scalar vs. profile on the converted
+  array and needs no cast; it also accepts a 0-d array as uniform
+  temperature (was rejected).
+
 ## [2.0.0] - 2026-10-16
 
 ### Upgrading from 1.x
