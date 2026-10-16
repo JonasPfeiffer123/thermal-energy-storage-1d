@@ -11,7 +11,6 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal
 
 # Add project root to Python path
@@ -124,7 +123,7 @@ class SimulationWorker(QThread):
         phases : list[SimPhase]
             List of operating phases.
         dt : float
-            Nominal timestep [s]. Sub-stepped as needed for CFL.
+            Nominal timestep [s] (the model sub-steps internally if needed).
         update_every_n : int
             UI update only after every n-th step (performance).
         hx_port : HeatExchangerPort, optional
@@ -173,20 +172,13 @@ class SimulationWorker(QThread):
                 self.phase_started.emit(phase_idx, phase.label())
                 inputs = self._build_inputs(phase, self.storage.config.height)
 
-                # Number of nominal timesteps in this phase
+                # Number of nominal timesteps in this phase. Stability is the
+                # model's job: the explicit solver sub-steps itself
+                # (auto_substep), the implicit solver needs no sub-steps.
                 n_steps = max(1, round(phase.duration / self.dt))
                 actual_dt = phase.duration / n_steps
 
-                # Check CFL and compute sub-steps
-                m_max = max(phase.m_dot_charge, phase.m_dot_discharge, 1e-6)
-                try:
-                    dt_cfl = self.storage.max_stable_dt(m_max)
-                    n_sub = max(1, int(np.ceil(actual_dt / (dt_cfl * 0.9))))
-                except Exception:
-                    n_sub = 1
-                sub_dt = actual_dt / n_sub
-
-                for step in range(n_steps):
+                for _step in range(n_steps):
                     if self._stop_flag:
                         break
 
@@ -196,10 +188,8 @@ class SimulationWorker(QThread):
                         if self._stop_flag:
                             break
 
-                    # Sub-steps for CFL compliance
-                    for _ in range(n_sub):
-                        outputs = self.storage.step(state, sub_dt, inputs)
-                        state = outputs.state
+                    outputs = self.storage.step(state, actual_dt, inputs)
+                    state = outputs.state
 
                     elapsed += actual_dt
                     self._all_states.append(state)
