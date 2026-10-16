@@ -246,3 +246,70 @@ def test_hx_warms_zone_nodes_only(make_storage, solver):
     T = out.state.temperatures
     assert T[0] > 40.0 + 1e-6          # top node (in zone) warmed
     assert T[-1] == pytest.approx(40.0, abs=1e-9)  # bottom node untouched
+
+
+# ---------------------------------------------------------------------------
+# Long timesteps: no overshoot beyond the external inlet temperature
+# ---------------------------------------------------------------------------
+# Small tank, strong heat exchanger, hourly coupling: the HX could heat the
+# storage far beyond its own inlet temperature when evaluated explicitly
+# (300 L tank, 70 °C inlet -> 153 °C after one hour, also with the
+# "unconditionally stable" implicit solver).
+
+
+@pytest.mark.parametrize("solver", ["explicit", "implicit"])
+@pytest.mark.parametrize("segmented", [False, True])
+def test_hx_never_heats_beyond_its_inlet_temperature(make_storage, solver, segmented):
+    storage = make_storage(volume=0.3, height=1.5, n_nodes=10, solver=solver,
+                           U_loss=0.0)
+    state = storage.initialize(T_init=40.0)
+    hx = HeatExchangerPort(z=0.75, H_hx=1.5, UA=2000.0, m_dot_ext=0.5,
+                           T_ext_in=70.0, segmented=segmented)
+    for _ in range(6):
+        out = storage.step(state, dt=3600.0, inputs=StorageInputs(hx_ports=[hx]))
+        state = out.state
+        assert state.temperatures.max() <= 70.0 + 1e-9
+        assert 40.0 - 1e-9 <= out.hx_outlet_temperatures[0] <= 70.0 + 1e-9
+    assert state.temperatures.min() > 69.0   # and it does approach the inlet
+
+
+@pytest.mark.parametrize("segmented", [False, True])
+def test_implicit_hx_converges_to_explicit_for_small_steps(make_storage, segmented):
+    """Implicit and explicit HX coupling agree in the limit of small dt."""
+    kwargs = dict(volume=10.0, height=3.0, n_nodes=12, U_loss=0.0)
+    hx = HeatExchangerPort(z=1.0, H_hx=1.2, UA=1500.0, m_dot_ext=0.3,
+                           T_ext_in=75.0, segmented=segmented,
+                           flow_direction="downward")
+    T = {}
+    for solver in ("explicit", "implicit"):
+        storage = make_storage(solver=solver, **kwargs)
+        state = storage.initialize(T_init=np.linspace(60.0, 30.0, 12))
+        for _ in range(360):
+            state = storage.step(state, dt=10.0,
+                                 inputs=StorageInputs(hx_ports=[hx])).state
+        T[solver] = state.temperatures
+    assert np.max(np.abs(T["explicit"] - T["implicit"])) < 0.05
+
+
+@pytest.mark.parametrize("segmented", [False, True])
+def test_implicit_hx_outlet_matches_transferred_heat(make_storage, segmented):
+    """T_ext_out is evaluated at the new temperatures, consistent with Q."""
+    storage = make_storage(volume=1.0, height=2.0, n_nodes=10, solver="implicit",
+                           U_loss=0.0, buoyancy=False)
+    state = storage.initialize(T_init=np.linspace(50.0, 30.0, 10))
+    hx = HeatExchangerPort(z=1.0, H_hx=2.0, UA=3000.0, m_dot_ext=0.4,
+                           T_ext_in=80.0, segmented=segmented)
+    out = storage.step(state, dt=1800.0, inputs=StorageInputs(hx_ports=[hx]))
+    Q_nodes, T_ext_out = storage._compute_hx_source_terms(out.state.temperatures, [hx])
+    assert out.hx_outlet_temperatures[0] == pytest.approx(T_ext_out[0], rel=1e-12)
+    dE = storage.get_stored_energy(out.state) - storage.get_stored_energy(state)
+    assert dE == pytest.approx(np.sum(Q_nodes) * 1800.0, rel=1e-9)
+
+
+def test_explicit_substeps_resolve_strong_heat_exchanger(make_storage):
+    """The explicit sub-step count includes the HX conductance."""
+    storage = make_storage(volume=0.3, height=1.5, n_nodes=10, solver="explicit")
+    state = storage.initialize(T_init=40.0)
+    hx = HeatExchangerPort(z=0.75, H_hx=1.5, UA=2000.0, m_dot_ext=0.5, T_ext_in=70.0)
+    assert storage._required_substeps(state, 3600.0, [], [hx]) > 1
+    assert storage._required_substeps(state, 3600.0, [], []) == 1

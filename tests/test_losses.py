@@ -223,6 +223,51 @@ def test_transient_ground_loss_reinitializes_on_node_count_change():
     assert np.all(loss.T_ground == pytest.approx(8.0))  # freshly re-initialized to T_far
 
 
+def test_transient_ground_loss_substeps_beyond_explicit_limit():
+    """Thin layers: dt far above R*C/2 is sub-stepped and stays bounded.
+
+    Before sub-stepping, 40 layers over 2 m with dt = 3600 s (limit about
+    900 s) diverged to ~1e39 °C within two days.
+    """
+    loss = TransientGroundLoss(
+        U_lid=0.15, T_ambient_lid=10.0, lambda_soil=2.2, rho_soil=2000.0,
+        cp_soil=800.0, d_total=2.0, n_layers=40, T_far=8.0,
+    )
+    dt = 3600.0
+    assert loss.substeps(dt) > 1
+    limit = loss._R * loss._C / 2.0
+    assert loss.substeps(limit) == 1
+
+    T_nodes = np.full(4, 80.0)
+    A_wall = np.full(4, 10.0)
+    z = np.linspace(3.5, 0.5, 4)
+    for _ in range(48):
+        loss.advance(T_nodes, A_wall, z, dt)
+    Tg = loss.T_ground
+    assert np.all(np.isfinite(Tg))
+    assert Tg[1:].min() >= 8.0 - 1e-9
+    assert Tg[1:].max() <= 80.0 + 1e-9
+
+
+def test_transient_ground_loss_substeps_match_manual_steps():
+    """One sub-stepped advance() equals the same number of plain steps."""
+    def make():
+        return TransientGroundLoss(
+            U_lid=0.15, T_ambient_lid=10.0, lambda_soil=2.2, rho_soil=2000.0,
+            cp_soil=800.0, d_total=2.0, n_layers=40, T_far=8.0,
+        )
+    T_nodes = np.linspace(80.0, 40.0, 4)
+    A_wall = np.full(4, 10.0)
+    z = np.linspace(3.5, 0.5, 4)
+    dt = 3600.0
+    manual, auto = make(), make()
+    n = manual.substeps(dt)
+    for _ in range(n):
+        manual.advance(T_nodes, A_wall, z, dt / n)
+    auto.advance(T_nodes, A_wall, z, dt)
+    assert np.array_equal(auto.T_ground, manual.T_ground)
+
+
 @pytest.mark.parametrize("kwargs", [
     dict(U_lid=-0.1, T_ambient_lid=10.0, lambda_soil=2.0, rho_soil=1800.0,
          cp_soil=900.0, d_total=8.0),

@@ -301,6 +301,74 @@ def implicit_solve(
     return x
 
 
+def implicit_coefficients(
+    T: list[float],
+    dt: float,
+    F_int: list[float],
+    S: list[float],
+    T_src: dict[int, float],
+    port_nodes: list[int],
+    C_nodes: list[float],
+    K: list[float],
+    cp: float,
+    Q_loss: list[float],
+    Q_src: list[float] | None = None,
+    tvd_flux: list[float] | None = None,
+) -> tuple[list[float], list[float], list[float], list[float]]:
+    """
+    Tridiagonal system ``(a, d, c, b)`` that :func:`implicit_solve` solves.
+
+    Same arguments and row formulas as :func:`implicit_solve`, assembled as
+    separate diagonals for callers that add couplings outside the
+    tridiagonal band (implicit heat exchangers);
+    ``solve_tdma(*implicit_coefficients(...)) == implicit_solve(...)``.
+    """
+    n = len(T)
+    C_dt = [C / dt for C in C_nodes]
+
+    b = [(0.0 + c_dt * t) + q for c_dt, t, q in zip(C_dt, T, Q_loss)]
+    if Q_src is not None:
+        b = [b_i + q for b_i, q in zip(b, Q_src)]
+    if tvd_flux is not None:
+        b = [b_i + ((0.0 + s_above) - s_below)
+             for b_i, s_above, s_below in zip(b, [0.0, *tvd_flux], [*tvd_flux, 0.0])]
+    d_out = [0.0] * n
+    for k in port_nodes:
+        s_k = S[k]
+        if s_k < 0.0:
+            d_out[k] = cp * s_k
+        elif s_k > 0.0:
+            b[k] += cp * s_k * T_src[k]
+
+    # Interface advection split into downward (>= 0) and upward (< 0) part
+    down: list[float] = []
+    up: list[float] = []
+    for F_k in F_int:
+        f = F_k * cp
+        if f >= 0.0:
+            down.append(f)
+            up.append(0.0)
+        else:
+            down.append(0.0)
+            up.append(f)
+
+    a = [0.0] * n
+    d = [0.0] * n
+    c = [0.0] * n
+    last = n - 1
+    d[0] = ((((0.0 + C_dt[0]) + K[0]) + 0.0) - 0.0 + down[0]) - d_out[0]
+    c[0] = (0.0 - K[0]) + up[0]
+    for i in range(1, last):
+        a[i] = (0.0 - K[i - 1]) - down[i - 1]
+        d[i] = (((((0.0 + C_dt[i]) + K[i]) + K[i - 1]) - up[i - 1] + down[i])
+                - d_out[i])
+        c[i] = (0.0 - K[i]) + up[i]
+    a[last] = (0.0 - K[last - 1]) - down[last - 1]
+    d[last] = (((((0.0 + C_dt[last]) + 0.0) + K[last - 1]) - up[last - 1] + 0.0)
+               - d_out[last])
+    return a, d, c, b
+
+
 # ---------------------------------------------------------------------------
 # Buoyancy
 # ---------------------------------------------------------------------------
