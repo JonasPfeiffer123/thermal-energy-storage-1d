@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- The UI runs on PySide6 (Qt for Python, LGPL-3.0) instead of PyQt6
+  (GPL-3.0): the `ui` extra and `requirements_ui.txt` install
+  `PySide6-Essentials>=6.7` (a full `PySide6` install works as well). The
+  interface itself is unchanged.
+
 ## [2.0.0] - 2026-10-16
 
 ### Upgrading from 1.x

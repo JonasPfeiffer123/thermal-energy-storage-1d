@@ -1,6 +1,6 @@
 # Graphical User Interface — User Guide
 
-![PyQt6 Interface](img/PyQt6_UI_1D_Storage.png)
+![Qt user interface](img/UI_1D_Storage.png)
 
 The graphical interface (`run_ui.py`) lets you configure, simulate, and export results from the 1D Thermal Storage model without writing any Python code.
 
@@ -28,7 +28,7 @@ Install the UI dependencies in addition to the core package:
 ```bash
 pip install ".[ui]"
 # or manually:
-pip install -r requirements_ui.txt   # PyQt6>=6.4.0, matplotlib>=3.7.0
+pip install -r requirements_ui.txt   # PySide6-Essentials>=6.7, matplotlib>=3.7.0
 ```
 
 Launch the interface from the repository root:

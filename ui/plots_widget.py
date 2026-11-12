@@ -17,7 +17,7 @@ import numpy as np
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavToolbar
 from matplotlib.figure import Figure
-from PyQt6.QtWidgets import QSizePolicy, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QSizePolicy, QTabWidget, QVBoxLayout, QWidget
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 

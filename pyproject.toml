@@ -25,9 +25,10 @@ benchmark = [
     "matplotlib>=3.4",
     "pandas>=1.3",
 ]
-# run_ui.py / ui/
+# run_ui.py / ui/ -- PySide6 (Qt for Python, LGPL-3.0); the Essentials wheel
+# holds QtCore/QtGui/QtWidgets, a full `PySide6` install satisfies it too.
 ui = [
-    "PyQt6>=6.4.0",
+    "PySide6-Essentials>=6.7",
     "matplotlib>=3.7.0",
 ]
 test = [
@@ -66,7 +67,7 @@ target-version = "py310"
 # below, which document real, intentional patterns rather than silencing a
 # genuine defect class.
 [tool.ruff.lint.per-file-ignores]
-# PyQt6 UI: catching bare Exception in live-preview/label update handlers is
+# Qt UI: catching bare Exception in live-preview/label update handlers is
 # intentional -- these run on every keystroke/partial input and must not
 # crash the application on any parse/validation failure. The two flagged
 # loop-variable closures in sim_control.py are defined *and* called within

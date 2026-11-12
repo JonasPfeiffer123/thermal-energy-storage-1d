@@ -11,7 +11,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from PyQt6.QtCore import QThread, pyqtSignal
+from PySide6.QtCore import QThread, Signal
 
 # Add project root to Python path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -91,17 +91,21 @@ class SimulationWorker(QThread):
         Contains: phase index, operating mode label.
     progress_updated(int)
         Progress 0–100 %.
-    finished(list, list)
-        Completion with complete state and output lists.
+    simulation_finished(list, list)
+        Completion with complete state and output lists. (Named so that it
+        does not shadow ``QThread.finished``, which Qt emits itself when
+        ``run()`` returns.)
     error_occurred(str)
         Error message on unexpected exceptions.
     """
 
-    step_complete = pyqtSignal(float, object, object)
-    phase_started = pyqtSignal(int, str)
-    progress_updated = pyqtSignal(int)
-    finished = pyqtSignal(list, list)
-    error_occurred = pyqtSignal(str)
+    step_complete = Signal(float, object, object)
+    phase_started = Signal(int, str)
+    progress_updated = Signal(int)
+    # ``object``, not ``list``: PySide6 would convert a ``list`` argument to a
+    # QVariantList instead of passing the Python list through.
+    simulation_finished = Signal(object, object)
+    error_occurred = Signal(str)
 
     def __init__(
         self,
@@ -214,7 +218,7 @@ class SimulationWorker(QThread):
                     )
                 self.progress_updated.emit(100)
 
-            self.finished.emit(self._all_states, self._all_outputs)
+            self.simulation_finished.emit(self._all_states, self._all_outputs)
 
         except Exception as exc:
             self.error_occurred.emit(f"{type(exc).__name__}: {exc}")

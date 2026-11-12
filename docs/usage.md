@@ -16,7 +16,7 @@ This document describes installation, quick start, all configuration options, an
 8. [DiffusorModel — Inflow Distribution](#8-diffusormodel--inflow-distribution)
 9. [HeatExchangerPort — Hydraulically Decoupled Heat Transfer](#9-heatexchangerport--hydraulically-decoupled-heat-transfer)
 10. [Headspace Model](#10-headspace-model)
-11. [Graphical User Interface (PyQt6)](#11-graphical-user-interface-pyqt6)
+11. [Graphical User Interface (PySide6)](#11-graphical-user-interface-pyside6)
 12. [Example Simulation](#12-example-simulation)
 13. [Benchmark: Comparison Against FreeTTES](#13-benchmark-comparison-against-freetttes)
 14. [Benchmark: Model Matrix (Ablation Study)](#14-benchmark-model-matrix-ablation-study)
@@ -29,7 +29,7 @@ This document describes installation, quick start, all configuration options, an
 ```bash
 pip install -e .                          # model only (NumPy)
 pip install -e ".[examples,benchmark]"    # + matplotlib, pandas for the scripts
-pip install -e ".[ui]"                    # + PyQt6 for the interactive UI
+pip install -e ".[ui]"                    # + PySide6 for the interactive UI
 # or, without installing the package:
 pip install -r requirements.txt
 ```
@@ -596,9 +596,9 @@ outputs.state.T_headspace  # Stored in state for the next step
 
 ---
 
-## 11. Graphical User Interface (PyQt6)
+## 11. Graphical User Interface (PySide6)
 
-![PyQt6 Interface](img/PyQt6_UI_1D_Storage.png)
+![Qt user interface](img/UI_1D_Storage.png)
 
 The graphical interface enables interactive parameterization, real-time visualization, and export without Python knowledge.
 
@@ -606,7 +606,7 @@ The graphical interface enables interactive parameterization, real-time visualiz
 
 ```bash
 pip install -r requirements_ui.txt
-# In addition to requirements.txt: PyQt6>=6.4.0, matplotlib>=3.7.0
+# In addition to requirements.txt: PySide6-Essentials>=6.7, matplotlib>=3.7.0
 ```
 
 ### Launch

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Entry point for the PyQt6 user interface of the 1D Thermal Storage Simulator.
+Entry point for the Qt (PySide6) user interface of the 1D Thermal Storage Simulator.
 
 Usage:
     python run_ui.py
@@ -16,11 +16,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 try:
-    from PyQt6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication
 except ImportError:
     print(
-        "PyQt6 not found. Please install:\n"
-        "  pip install PyQt6\n"
+        "PySide6 not found. Please install:\n"
+        "  pip install PySide6-Essentials\n"
         "or:\n"
         "  pip install -r requirements_ui.txt"
     )
@@ -30,7 +30,7 @@ from ui.main_window import MainWindow
 
 
 def main():
-    # High-DPI support (enabled by default in PyQt6)
+    # High-DPI support is enabled by default in Qt 6
     app = QApplication(sys.argv)
     app.setApplicationName("1D Thermal Storage Simulator")
     app.setApplicationVersion("1.0")
