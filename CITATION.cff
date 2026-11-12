@@ -19,8 +19,8 @@ authors:
     city: Zittau
     country: DE
     website: "https://www.hszg.de"
-version: 2.0.0
-date-released: "2026-10-16"
+version: 2.1.0
+date-released: "2026-11-12"
 license: MIT
 repository-code: "https://github.com/JonasPfeiffer123/thermal-energy-storage-1d"
 url: "https://github.com/JonasPfeiffer123/thermal-energy-storage-1d"
