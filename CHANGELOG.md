@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-11-12
+
+The code is now MIT-licensed, and the UI runs on PySide6 instead of PyQt6.
+The model and its API are unchanged.
+
 ### Changed
 - **License:** MIT instead of GPL-3.0-or-later. Releases up to and
   including 2.0.0 remain under the GPL. Copyright holders are Jonas Pfeiffer
@@ -279,7 +284,8 @@ Archived on Zenodo: [10.5281/zenodo.20595165](https://doi.org/10.5281/zenodo.205
   this model (accepted; full paper forthcoming).
 - CI workflow running the test suite on push and pull request.
 
-[Unreleased]: https://github.com/JonasPfeiffer123/thermal-energy-storage-1d/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/JonasPfeiffer123/thermal-energy-storage-1d/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/JonasPfeiffer123/thermal-energy-storage-1d/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/JonasPfeiffer123/thermal-energy-storage-1d/compare/v1.1.0...v2.0.0
 [1.1.0]: https://github.com/JonasPfeiffer123/thermal-energy-storage-1d/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/JonasPfeiffer123/thermal-energy-storage-1d/releases/tag/v1.0.0
