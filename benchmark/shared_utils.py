@@ -3,6 +3,10 @@ Shared utility functions for all benchmark scripts.
 
 Contains physical calculations (water density, enthalpy, usable energy),
 profile interpolation, and output helpers.
+
+The water property polynomials and the usable-energy calculation are taken
+from FreeTTES (Copyright (c) 2026, FreeTTES, TU Dresden – Gebäudeenergietechnik
+und Wärmeversorgung; BSD 3-Clause License, see NOTICE.md).
 """
 
 from __future__ import annotations
@@ -25,7 +29,7 @@ def rho_water(T: float) -> float:
     """
     Water density using the FreeTTES polynomial fit [kg/m³].
 
-    Identical to FreeTTES_model._sw_rho() so that mass flow conversions
+    Identical to FreeTTES (``__Temperatur_Abhaengige_Stoffwerte`` in FreeTTES_model.py) so that mass flow conversions
     match exactly.
 
     Parameters
@@ -50,7 +54,7 @@ def _sw_h(T: float | np.ndarray) -> float | np.ndarray:
     """
     Specific enthalpy of water [J/kg] using the FreeTTES polynomial.
 
-    Identical to FreeTTES_model._sw_h() so that usable-energy calculations
+    Identical to FreeTTES (``__Temperatur_Abhaengige_Stoffwerte`` in FreeTTES_model.py) so that usable-energy calculations
     match exactly.
     """
     return 4.394221e-01 * T**2 + 4.129877e+03 * T + 1.987100e+03
