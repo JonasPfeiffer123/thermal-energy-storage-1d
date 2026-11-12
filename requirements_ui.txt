@@ -1,5 +1,5 @@
-# Dependencies of the PyQt6 user interface (run_ui.py, ui/).
+# Dependencies of the Qt (PySide6) user interface (run_ui.py, ui/).
 # Equivalent: pip install -e ".[ui]"
 numpy>=1.21.6
-PyQt6>=6.4.0
+PySide6-Essentials>=6.7
 matplotlib>=3.7.0

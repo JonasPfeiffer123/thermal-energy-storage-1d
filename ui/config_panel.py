@@ -10,8 +10,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from PyQt6.QtCore import pyqtSignal
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import Signal
+from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -93,7 +93,7 @@ class ConfigPanel(QWidget):
         Emitted on every parameter change.
     """
 
-    config_changed = pyqtSignal(object)
+    config_changed = Signal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)

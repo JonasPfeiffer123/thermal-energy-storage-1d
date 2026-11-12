@@ -20,7 +20,7 @@ A 1D finite-volume model of a stratified hot-water thermal energy storage (TES) 
 - **Temperature-dependent fluid properties** — WaterProperties (polynomial fits matching FreeTTES)
 - **Headspace model** — dynamic roof/gas space thermal mass (for atmospheric pit stores)
 - **Storage presets** — StoragePresets factory for common configurations
-- **Interactive UI** — PyQt6 GUI with 3D tank visualisation and live plots
+- **Interactive UI** — Qt GUI (PySide6) with 3D tank visualisation and live plots
 - **Co-simulation interface** — `step()` is a function of the complete `StorageState` (repeatable for rollback and iterative coupling); outlet temperatures close the energy balance of each step; per-step ambient temperature
 
 Planned: FMI 2.0 interface for co-simulation coupling via pythonfmu.
@@ -32,7 +32,7 @@ Python ≥ 3.10. The model itself only needs NumPy (≥ 1.21.6):
 ```bash
 pip install -e .                          # model only
 pip install -e ".[examples,benchmark]"    # + matplotlib, pandas for examples/ and benchmark/
-pip install -e ".[ui]"                    # + PyQt6 for the interactive UI
+pip install -e ".[ui]"                    # + PySide6 for the interactive UI
 ```
 
 Without installing the package, `pip install -r requirements.txt` (examples
@@ -71,7 +71,7 @@ See [examples/example_simulation.py](examples/example_simulation.py) for a compl
 python run_ui.py
 ```
 
-![UI screenshot](docs/img/PyQt6_UI_1D_Storage.png)
+![UI screenshot](docs/img/UI_1D_Storage.png)
 
 The UI lets you configure storage geometry, loss parameters, solver settings, and port positions interactively, with a live 3D view and real-time temperature profile and outlet-temperature plots.
 
@@ -92,7 +92,7 @@ thermal-energy-storage-1d/
 │   ├── model.py                   # ThermalStorage1D (main class)
 │   └── presets.py                 # StoragePresets factory
 ├── run_ui.py                      # UI entry point
-├── ui/                            # PyQt6 UI components
+├── ui/                            # Qt (PySide6) UI components
 ├── examples/
 │   ├── example_simulation.py      # Three-phase example
 │   └── simulation_results.svg
@@ -189,7 +189,7 @@ Pre-computed result plots are available in `benchmark/results/dronninglund/` and
 | [docs/physics.md](docs/physics.md) | Physical model: energy balance, advection schemes, loss models, geometry |
 | [docs/architecture.md](docs/architecture.md) | Class hierarchy, data flow, extension interfaces |
 | [docs/usage.md](docs/usage.md) | Usage guide: API, presets, benchmark scripts |
-| [docs/ui.md](docs/ui.md) | Interactive PyQt6 UI: panels, scenario editor, export |
+| [docs/ui.md](docs/ui.md) | Interactive Qt UI (PySide6): panels, scenario editor, export |
 
 ## Physical Model Summary
 

@@ -13,9 +13,9 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QColor
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor
+from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QComboBox,
@@ -66,10 +66,12 @@ class SimControlWidget(QWidget):
         Export results.
     """
 
-    run_requested = pyqtSignal(float, float, list)
-    pause_requested = pyqtSignal()
-    stop_requested = pyqtSignal()
-    export_requested = pyqtSignal()
+    # ``object``, not ``list``: PySide6 would convert a ``list`` argument to a
+    # QVariantList instead of passing the list of SimPhase objects through.
+    run_requested = Signal(float, float, object)
+    pause_requested = Signal()
+    stop_requested = Signal()
+    export_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -247,7 +249,8 @@ class SimControlWidget(QWidget):
         btn_row = QHBoxLayout()
         self.btn_add_phase = QPushButton("+ Phase")
         self.btn_add_phase.setToolTip("Add new phase")
-        self.btn_add_phase.clicked.connect(self._add_phase_row)
+        # lambda: clicked(bool) would otherwise arrive as the `mode` argument
+        self.btn_add_phase.clicked.connect(lambda: self._add_phase_row())
 
         self.btn_dup_phase = QPushButton("Duplicate")
         self.btn_dup_phase.setToolTip("Duplicate selected phase")
@@ -307,7 +310,8 @@ class SimControlWidget(QWidget):
             "border-radius: 4px; padding: 6px; }"
             "QPushButton:disabled { background: #45475a; color: #585b70; }"
         )
-        self.btn_export.clicked.connect(self.export_requested.emit)
+        # lambda: clicked(bool) must not reach the argument-less emit()
+        self.btn_export.clicked.connect(lambda: self.export_requested.emit())
 
         ctrl_layout.addWidget(self.btn_run)
         ctrl_layout.addWidget(self.btn_pause)

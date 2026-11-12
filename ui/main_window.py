@@ -1,5 +1,5 @@
 """
-Main window of the PyQt6 user interface.
+Main window of the Qt (PySide6) user interface.
 
 Layout:
     Left:   ConfigPanel (geometry, fluid, losses, numerics)
@@ -17,9 +17,9 @@ from pathlib import Path
 from typing import ClassVar
 
 import numpy as np
-from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QAction, QKeySequence
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtWidgets import (
     QDockWidget,
     QFileDialog,
     QLabel,
@@ -443,7 +443,7 @@ class MainWindow(QMainWindow):
         self._worker.step_complete.connect(self._on_step)
         self._worker.phase_started.connect(self._on_phase_started)
         self._worker.progress_updated.connect(self._sim_ctrl.progress_bar.setValue)
-        self._worker.finished.connect(self._on_simulation_finished)
+        self._worker.simulation_finished.connect(self._on_simulation_finished)
         self._worker.error_occurred.connect(self._on_worker_error)
         self._worker.start()
 
@@ -755,7 +755,7 @@ class MainWindow(QMainWindow):
             "Physics-based 1D model of a stratified hot-water storage tank<br>"
             "for co-simulation with district heating network software.<br><br>"
             "<b>Model:</b> Explicit Euler + TVD van Leer + buoyancy correction<br>"
-            "<b>UI:</b> PyQt6 + matplotlib<br><br>"
+            "<b>UI:</b> PySide6 (Qt for Python) + matplotlib<br><br>"
             "Developed with Claude Code (Anthropic)"
         )
 
