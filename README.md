@@ -248,8 +248,15 @@ This work was developed as part of the EFRE/ESF-funded Junior Research Group **"
 
 ## License
 
-GPL-3.0-or-later — see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE). Copyright © 2026 Jonas Pfeiffer and
+Hochschule Zittau/Görlitz.
 
-The optional UI (`ui/`, `run_ui.py`) depends on PyQt6, which is distributed
-under the GPL v3 (a commercial Riverbank license is also available); this
-project as a whole is therefore licensed under the GPL v3 as well.
+Releases up to and including v2.0.0 were published under GPL-3.0-or-later and
+remain available under that license.
+
+The water property polynomials and parts of the benchmark scripts are derived
+from [FreeTTES](https://github.com/gewv-tu-dresden/FreeTTES) (TU Dresden,
+BSD 3-Clause License); see [NOTICE.md](NOTICE.md).
+
+The optional UI (`ui/`, `run_ui.py`) uses PySide6 (Qt for Python), which is
+installed separately and licensed under the LGPL-3.0.

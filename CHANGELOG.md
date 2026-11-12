@@ -8,10 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **License:** MIT instead of GPL-3.0-or-later. Releases up to and
+  including 2.0.0 remain under the GPL. Copyright holders are Jonas Pfeiffer
+  and Hochschule Zittau/Görlitz, which is listed as an author in
+  `CITATION.cff` and `pyproject.toml`.
+- Package metadata declare the license as an SPDX expression with license
+  files (PEP 639); building from source needs `setuptools>=77`, which pip
+  fetches automatically.
 - The UI runs on PySide6 (Qt for Python, LGPL-3.0) instead of PyQt6
   (GPL-3.0): the `ui` extra and `requirements_ui.txt` install
   `PySide6-Essentials>=6.7` (a full `PySide6` install works as well). The
   interface itself is unchanged.
+
+### Added
+- `NOTICE.md`: attribution and license (BSD 3-Clause) of FreeTTES, from
+  which the `WaterProperties` polynomials and parts of the benchmark scripts
+  are derived; FreeTTES is also listed in the `CITATION.cff` references.
 
 ## [2.0.0] - 2026-10-16
 

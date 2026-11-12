@@ -1,7 +1,8 @@
 """
 Shared simulation parameters for all benchmark scripts.
 
-All values match the FreeTTES reference configuration (config.json).
+All values match the FreeTTES reference configuration (config.json;
+FreeTTES: BSD 3-Clause License, see NOTICE.md).
 Changes here affect benchmark_model_variants.py and benchmark_scenarios.py.
 """
 

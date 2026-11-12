@@ -1,5 +1,6 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+# setuptools>=77: SPDX license expression and license-files (PEP 639)
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,7 +8,12 @@ name = "thermal-energy-storage-1d"
 dynamic = ["version"]
 description = "1D finite-volume model of a stratified hot-water thermal energy storage tank"
 readme = "README.md"
-license = { text = "GPL-3.0-or-later" }
+license = "MIT"
+license-files = ["LICENSE", "NOTICE.md"]
+authors = [
+    { name = "Jonas Pfeiffer", email = "jonas.pfeiffer@hszg.de" },
+    { name = "Hochschule Zittau/Görlitz (University of Applied Sciences Zittau/Görlitz)" },
+]
 requires-python = ">=3.10"
 # The model itself needs NumPy only. The lower bound is tested in CI
 # (oldest NumPy with wheels for the oldest supported Python, 3.10).

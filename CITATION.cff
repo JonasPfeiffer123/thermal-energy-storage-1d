@@ -15,9 +15,13 @@ authors:
     email: jonas.pfeiffer@hszg.de
     affiliation: "University of Applied Sciences Zittau/Görlitz"
     orcid: "https://orcid.org/0009-0003-2913-7289"
+  - name: "Hochschule Zittau/Görlitz (University of Applied Sciences Zittau/Görlitz)"
+    city: Zittau
+    country: DE
+    website: "https://www.hszg.de"
 version: 2.0.0
 date-released: "2026-10-16"
-license: GPL-3.0-or-later
+license: MIT
 repository-code: "https://github.com/JonasPfeiffer123/thermal-energy-storage-1d"
 url: "https://github.com/JonasPfeiffer123/thermal-energy-storage-1d"
 keywords:
@@ -29,6 +33,21 @@ keywords:
   - pit thermal energy storage
 doi: "10.5281/zenodo.20595164"
 references:
+  - type: software
+    title: "FreeTTES: open source stratified TTES model"
+    authors:
+      - family-names: Herwig
+        given-names: Andreas
+        affiliation: "TU Dresden, Gebäudeenergietechnik und Wärmeversorgung"
+      - family-names: Narusavicius
+        given-names: Bogdan
+        affiliation: "TU Dresden, Gebäudeenergietechnik und Wärmeversorgung"
+    repository-code: "https://github.com/gewv-tu-dresden/FreeTTES"
+    license: BSD-3-Clause
+    notes: >-
+      Benchmark reference model. The water property polynomials
+      (WaterProperties) and the benchmark configuration are taken from
+      FreeTTES; see NOTICE.md.
   - type: conference-paper
     title: >-
       Modular 1D Stratified Thermal Energy Storage Model with Multi-Port

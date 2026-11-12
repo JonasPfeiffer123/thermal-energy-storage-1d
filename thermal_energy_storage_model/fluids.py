@@ -95,8 +95,10 @@ class WaterProperties(FluidProperties):
 
     Coefficient source
     ------------------
-    FreeTTES (_sw_rho, _sw_cp, _sw_lambda), adopted for consistency
-    with the benchmark reference model.
+    FreeTTES (``__Temperatur_Abhaengige_Stoffwerte`` in FreeTTES_model.py),
+    adopted for consistency with the benchmark reference model.
+    FreeTTES: Copyright (c) 2026, FreeTTES, TU Dresden – Gebäudeenergietechnik
+    und Wärmeversorgung; BSD 3-Clause License, see NOTICE.md.
 
     Examples
     --------
